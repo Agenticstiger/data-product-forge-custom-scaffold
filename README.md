@@ -1,10 +1,12 @@
 # data-product-forge-custom-scaffold
 
-**The custom-scaffold engine for FLUID.** Install it alongside the FLUID CLI, plug in any scaffold bundle, and generate a complete project from your contract.
+**The custom-scaffold engine for `data-product-forge`.** Install it alongside the CLI, plug in any scaffold bundle, and generate a complete project from your contract.
 
 ```bash
 pip install data-product-forge data-product-forge-custom-scaffold
 ```
+
+This pulls `data-product-forge-sdk` transitively (import path: `fluid_sdk`). Requires Python `>=3.10`.
 
 Then in any fluid contract:
 
@@ -32,10 +34,10 @@ Deterministic, idempotent, atomic.
 
 ## What this engine does
 
-This is the **runtime** for FLUID's custom-scaffold feature:
+This is the **runtime** for `data-product-forge`'s custom-scaffold feature:
 
-1. **Discovers** itself with the FLUID CLI via Python entry-points (just `pip install`).
-2. **Resolves** bundles from `path` (local) or `git` (clone into cache).
+1. **Discovers** itself with the CLI via Python entry-points (just `pip install`).
+2. **Resolves** bundles from `path` (local), `git` (clone into cache), or `entrypoint` (installed Python plugin).
 3. **Validates** the `extensions.customScaffold` block in your contract.
 4. **Renders** each pattern through Jinja2.
 5. **Writes** the generated files atomically with path-traversal protection.
