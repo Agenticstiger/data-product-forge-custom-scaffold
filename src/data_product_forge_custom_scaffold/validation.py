@@ -55,7 +55,18 @@ CUSTOM_SCAFFOLD_SCHEMA: Dict[str, Any] = {
                             # schema — we want the schema to stay flexible).
                             "path": {"type": "string"},
                             "url": {"type": "string"},
-                            "ref": {"type": "string"},
+                            # Restricted to characters legal in a git ref name.
+                            # Defense-in-depth: subprocess uses list form, so
+                            # argv-injection is not the threat — but a `ref`
+                            # value of e.g. `--upload-pack=evil` should not
+                            # even reach git, and any non-ref characters are
+                            # never legitimate. Allows alphanumerics, dot,
+                            # dash, underscore, slash.
+                            "ref": {
+                                "type": "string",
+                                "pattern": r"^[A-Za-z0-9._/-]+$",
+                                "maxLength": 256,
+                            },
                             "name": {"type": "string"},
                             "package": {"type": "string"},
                             "version": {"type": "string"},

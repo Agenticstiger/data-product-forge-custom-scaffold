@@ -71,6 +71,58 @@ def test_unknown_library_ref_in_use_rejected() -> None:
     assert any("missing-lib" in e for e in errors)
 
 
+def test_valid_git_refs_accepted() -> None:
+    """Real-world git refs (tag, branch, SHA, slashed branch) must pass."""
+    for ref in ("v1.2.3", "main", "release/2026.05", "abc1234", "0.9.0-rc1"):
+        errors = _run(
+            {
+                "customScaffold": {
+                    "libraries": [
+                        {
+                            "id": "ci",
+                            "source": {"kind": "git", "url": "https://x", "ref": ref},
+                        }
+                    ],
+                    "patterns": [{"use": "ci:basic"}],
+                }
+            }
+        )
+        assert errors == [], f"ref {ref!r} was rejected unexpectedly: {errors}"
+
+
+def test_dangerous_ref_values_rejected() -> None:
+    """Defense-in-depth: a ref shaped like a git flag must be rejected by
+    the schema before reaching the resolver. Subprocess list-form already
+    blocks argv injection, but the schema should refuse values that have
+    no legitimate use as a git ref.
+    """
+    dangerous = (
+        "--upload-pack=evil",  # flag-shaped
+        "ref with spaces",  # whitespace
+        "$(rm -rf /)",  # shell metacharacters
+        ";cat /etc/passwd",  # injection-shaped
+        "ref\nwith\nnewlines",  # control characters
+        "ref\twith\ttabs",
+    )
+    for ref in dangerous:
+        errors = _run(
+            {
+                "customScaffold": {
+                    "libraries": [
+                        {
+                            "id": "ci",
+                            "source": {"kind": "git", "url": "https://x", "ref": ref},
+                        }
+                    ],
+                    "patterns": [{"use": "ci:basic"}],
+                }
+            }
+        )
+        assert any(
+            "ref" in e for e in errors
+        ), f"dangerous ref {ref!r} was accepted; expected rejection: {errors}"
+
+
 def test_invalid_secret_ref_rejected() -> None:
     errors = _run(
         {
