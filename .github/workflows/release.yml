@@ -1,0 +1,144 @@
+# Release Pipeline — publish to PyPI and create a GitHub Release.
+#
+# Triggers:
+#   - Push a tag matching v*.*.*  (e.g. v0.1.0, v0.2.0a1)
+#   - Manual dispatch with version input
+#
+# Publishing uses PyPI trusted publishing (OIDC) — no API token. The
+# PyPI project name is `data-product-forge-custom-scaffold`; the trusted
+# publisher must be configured at
+# https://pypi.org/manage/project/data-product-forge-custom-scaffold/settings/publishing/
+# with: owner=Agenticstiger, repo=data-product-forge-custom-scaffold,
+# workflow filename=release.yml.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Parse version
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *a* ]] || [[ "$VERSION" == *b* ]] || [[ "$VERSION" == *dev* ]] || [[ "$VERSION" == *rc* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install with dev extras
+        run: pip install -e ".[dev]" ruff black
+
+      - name: Lint
+        run: |
+          ruff check src/ tests/
+          black --check src/ tests/
+
+      - name: Pytest
+        run: pytest tests/ -v
+
+      - name: Verify version matches tag
+        run: |
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          TAG_VERSION="${{ steps.meta.outputs.version }}"
+          TAG_BASE=$(echo "$TAG_VERSION" | sed 's/[ab].*//' | sed 's/\.dev.*//' | sed 's/rc.*//')
+          if [ "$PKG_VERSION" != "$TAG_BASE" ] && [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Version mismatch: pyproject.toml=${PKG_VERSION}, tag=${TAG_VERSION}"
+            exit 1
+          fi
+
+  build:
+    name: Build Package
+    needs: quality-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build sdist + wheel
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+      - name: Smoke install built wheel
+        run: |
+          python -m venv /tmp/test-install
+          /tmp/test-install/bin/pip install dist/*.whl
+          /tmp/test-install/bin/python -c "from data_product_forge_custom_scaffold.engine import Engine; print('OK')"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 30
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [quality-gate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/data-product-forge-custom-scaffold
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub Release
+    needs: [quality-gate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: "data-product-forge-custom-scaffold ${{ needs.quality-gate.outputs.version }}"
+          prerelease: ${{ needs.quality-gate.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          files: dist/*

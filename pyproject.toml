@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "data-product-forge-custom-scaffold"
 version = "0.1.0"
-description = "Custom-scaffold engine for FLUID — install, plug in any scaffold bundle (Python plugin or YAML/Jinja), generate a complete project from your contract"
-readme = "README.md"
-requires-python = ">=3.9"
+description = "Custom-scaffold engine for data-product-forge — install, plug in any scaffold bundle (Python plugin or YAML/Jinja), generate a complete project from your contract"
+readme = {file = "README.md", content-type = "text/markdown"}
+requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 authors = [
-    {name = "FLUID Community"},
+    {name = "data-product-forge Community"},
 ]
 keywords = [
     "fluid",
@@ -27,20 +27,20 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Code Generators",
     "Typing :: Typed",
 ]
 
 dependencies = [
-    "fluid-sdk>=1.0.0",      # role-typed ABCs + ContractHelper
-    "Jinja2>=3.1",           # template engine for YAML/Jinja bundles
-    "PyYAML>=6.0",           # parse fluid-scaffold.yaml manifests
-    "jsonschema>=4.17",      # validate contract.extensions.customScaffold
+    "data-product-forge-sdk>=0.9,<1",   # role-typed ABCs + ContractHelper (import path: fluid_sdk)
+    "Jinja2>=3.1",                      # template engine for YAML/Jinja bundles
+    "PyYAML>=6.0",                      # parse fluid-scaffold.yaml manifests
+    "jsonschema>=4.17",                 # validate contract.extensions.customScaffold
 ]
 
 [project.optional-dependencies]
@@ -62,9 +62,10 @@ generate-custom-scaffold = "data_product_forge_custom_scaffold.cli:register"
 customScaffold = "data_product_forge_custom_scaffold.validation:validate"
 
 [project.urls]
-Documentation = "https://github.com/fluid-build/data-product-forge-custom-scaffold#readme"
-Repository = "https://github.com/fluid-build/data-product-forge-custom-scaffold"
-Issues = "https://github.com/fluid-build/data-product-forge-custom-scaffold/issues"
+Documentation = "https://github.com/Agenticstiger/data-product-forge-custom-scaffold#readme"
+Repository = "https://github.com/Agenticstiger/data-product-forge-custom-scaffold"
+Issues = "https://github.com/Agenticstiger/data-product-forge-custom-scaffold/issues"
+Changelog = "https://github.com/Agenticstiger/data-product-forge-custom-scaffold/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -83,7 +84,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "N"]
@@ -91,4 +92,4 @@ ignore = ["E501"]
 
 [tool.black]
 line-length = 100
-target-version = ["py39", "py310", "py311", "py312", "py313"]
+target-version = ["py310", "py311", "py312", "py313", "py314"]
