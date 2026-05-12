@@ -1,0 +1,21 @@
+# Auto-generated CI for {{ product_id }}
+stages:
+  - validate
+  - deploy
+
+validate:
+  stage: validate
+  script:
+    - fluid validate
+
+{% for env in environments|sort %}
+deploy:{{ env }}:
+  stage: deploy
+  script:
+    - fluid apply --env {{ env }}
+{%- if env == "prod" %}
+  when: manual
+{%- endif %}
+  only:
+    - main
+{% endfor %}

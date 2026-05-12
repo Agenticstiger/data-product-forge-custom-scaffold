@@ -1,0 +1,29 @@
+apiVersion: fluid.dev/custom-scaffold.v1
+bundle:
+  name: reference-bundle
+  version: 1.0.0
+  description: Reference fixture — README + multi-env CI + a verbatim docs/ file.
+  author: FLUID Community
+
+patterns:
+  - name: basic
+    description: README + .gitlab-ci.yml; static/docs/ copied verbatim.
+    supportedProductTypes: [SDP, ADP, CDP]
+    variables:
+      $schema: http://json-schema.org/draft-07/schema#
+      type: object
+      properties:
+        teamName:
+          type: string
+          default: platform
+
+    requiredContractFields:
+      - metadata.owner.email
+      - environments
+
+    templates:
+      - from: templates/README.md.j2
+        to: README.md
+
+      - from: templates/.gitlab-ci.yml.j2
+        to: .gitlab-ci.yml

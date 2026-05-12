@@ -1,0 +1,12 @@
+# {{ product_name or product_id }}
+
+{{ description }}
+
+**Owner:** {{ owner.email }}
+**Team:** {{ teamName }}
+
+## Environments
+
+{% for env in environments|sort -%}
+- `{{ env }}`
+{% endfor %}
