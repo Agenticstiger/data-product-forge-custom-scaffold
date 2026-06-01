@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-06-01
+
+### Added
+
+- **Shipped JSON-Schema artifact** `schemas/custom-scaffold.v1.json`, loaded via
+  `importlib.resources` as the single source of truth for the
+  `extensions.customScaffold` validator (was inline-only; the declared
+  `schemas/*.json` package-data glob now resolves and ships in the wheel).
+- **Native `fluid forge` copilot support** — `get_extension_schema()` registered
+  under the new `fluid_build.extension_schemas` entry-point group, so the copilot
+  can natively generate and validate `extensions.customScaffold` blocks.
+- **White-label spec dialects** — `ScaffoldDialect` plus `make_validator()` /
+  `make_register()` factories let a third party reuse the engine under their own
+  manifest `apiVersion`, `extensions.<key>`, and CLI subcommand without forking.
+  Runnable `examples/acme-scaffold/` reference included.
+
 ## [0.1.0] — 2026-05-12
 
 First public release.
