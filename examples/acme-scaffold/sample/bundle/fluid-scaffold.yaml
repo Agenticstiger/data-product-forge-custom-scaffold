@@ -1,0 +1,14 @@
+apiVersion: acme.dev/scaffold.v1
+bundle:
+  name: acme-ci-bundle
+  version: 1.0.0
+  description: Minimal ACME CI scaffold (README) for the white-label demo.
+  author: ACME Data Platform
+patterns:
+  - name: basic
+    description: Emits a README rendered from the fluid contract.
+    requiredContractFields:
+      - metadata.owner.email
+    templates:
+      - from: templates/README.md.j2
+        to: README.md

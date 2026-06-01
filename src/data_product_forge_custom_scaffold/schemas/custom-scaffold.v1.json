@@ -1,0 +1,142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "extensions.customScaffold",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "libraries",
+    "patterns"
+  ],
+  "properties": {
+    "libraries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+            "description": "Local alias for this library, referenced by patterns[].use"
+          },
+          "source": {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "path",
+                  "git",
+                  "entrypoint"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._/-]+$",
+                "maxLength": 256,
+                "description": "Restricted to characters legal in a git ref name (alphanumerics, dot, dash, underscore, slash). Defense-in-depth: a ref value such as --upload-pack=evil must never reach git, and non-ref characters are never legitimate."
+              },
+              "name": {
+                "type": "string"
+              },
+              "package": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "registry": {
+                "type": "string"
+              },
+              "index_url": {
+                "type": "string"
+              },
+              "subdir": {
+                "type": "string"
+              },
+              "auth": {
+                "type": "object",
+                "properties": {
+                  "secret_ref": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                  },
+                  "mode": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "patterns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "use"
+        ],
+        "properties": {
+          "use": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z][a-zA-Z0-9_-]*$",
+            "description": "<library-id>:<pattern-name>"
+          },
+          "output": {
+            "type": "string"
+          },
+          "variables": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "when": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "environments": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "onMissingLib": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warn",
+            "skip"
+          ]
+        },
+        "allowNetworkFetch": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$comment": "Single source of truth for the contract.extensions.customScaffold block. Shipped as package data and loaded by validation.py via importlib.resources; also advertised to the forge CLI copilot via the fluid_build.extension_schemas entry point."
+}

@@ -31,6 +31,8 @@ from fluid_sdk import (
 )
 
 from .context import build_render_context
+from .dialect import DEFAULT as DEFAULT_DIALECT
+from .dialect import ScaffoldDialect
 from .manifest import BundleManifest, PatternEntry
 from .renderer import Renderer
 from .version import ENGINE_VERSION
@@ -58,14 +60,16 @@ class TemplatedCustomScaffold(CustomScaffold):
         pattern_name: str,
         variables: Optional[Mapping[str, Any]] = None,
         output_root: Optional[Path] = None,
+        dialect: ScaffoldDialect = DEFAULT_DIALECT,
         **kwargs: Any,
     ) -> None:
         super().__init__(output_root=output_root, **kwargs)
         self.bundle_root = Path(bundle_root).resolve()
         self.pattern_name = pattern_name
         self.variables: Dict[str, Any] = dict(variables or {})
+        self.dialect = dialect
 
-        self._manifest = BundleManifest.from_path(self.bundle_root)
+        self._manifest = BundleManifest.from_path(self.bundle_root, dialect=dialect)
         self._pattern = self._manifest.get_pattern(pattern_name)
         if self._pattern is None:
             raise PluginError(

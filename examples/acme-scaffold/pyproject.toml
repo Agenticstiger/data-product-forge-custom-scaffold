@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acme-scaffold"
+version = "0.1.0"
+description = "Example white-label 'custom spec dialect' built on data-product-forge-custom-scaffold."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "data-product-forge-custom-scaffold>=0.1,<1",  # reuse the engine wholesale
+]
+
+# ─── White-label: reuse the engine under ACME's own dialect ──────────
+#
+# Register ACME-named entry points under the SAME standard fluid_build.*
+# GROUPS the forge CLI already walks. The forge CLI keys extension validators
+# and schemas by entry-point NAME == the contract.extensions.<key>, so the
+# name here MUST equal the dialect's extension_key ("acmeScaffold").
+
+# 1. CLI subcommand: `fluid generate acme-scaffold`
+[project.entry-points."fluid_build.commands"]
+generate-acme-scaffold = "acme_scaffold.dialect:register"
+
+# 2. Contract-validation hook for the `extensions.acmeScaffold` block
+[project.entry-points."fluid_build.extension_validators"]
+acmeScaffold = "acme_scaffold.dialect:validate"
+
+# 3. JSON-Schema provider so the `fluid forge` copilot natively generates
+#    and validates `extensions.acmeScaffold` (same path as the built-in dialect)
+[project.entry-points."fluid_build.extension_schemas"]
+acmeScaffold = "acme_scaffold.dialect:get_extension_schema"
+
+[tool.setuptools.packages.find]
+where = ["src"]

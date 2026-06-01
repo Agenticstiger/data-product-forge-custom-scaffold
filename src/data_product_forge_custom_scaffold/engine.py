@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from fluid_sdk import CustomScaffold, ExecutionResult, PluginError
 
+from .dialect import DEFAULT as DEFAULT_DIALECT
+from .dialect import ScaffoldDialect
 from .resolvers import ResolvedBundle, resolve_bundle
 from .templated import TemplatedCustomScaffold
 
@@ -58,9 +60,11 @@ class Engine:
         *,
         output_root: Path,
         contract_dir: Optional[Path] = None,
+        dialect: ScaffoldDialect = DEFAULT_DIALECT,
     ) -> None:
         self.output_root = Path(output_root).resolve()
         self.contract_dir = (contract_dir or Path.cwd()).resolve()
+        self.dialect = dialect
 
     def run(
         self,
@@ -130,7 +134,11 @@ class Engine:
 
         return EngineRunResult(
             actions=all_actions,
-            apply_result=_aggregate(apply_results) if apply_results else None,
+            apply_result=(
+                _aggregate(apply_results, plugin_name=self.dialect.aggregate_plugin_name)
+                if apply_results
+                else None
+            ),
             resolved_libraries=resolved,
         )
 
@@ -182,26 +190,28 @@ class Engine:
             pattern_name=pattern_name,
             variables=dict(variables),
             output_root=self.output_root,
+            dialect=self.dialect,
         )
 
-    @staticmethod
-    def _extract_block(contract: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    def _extract_block(self, contract: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
         ext = contract.get("extensions")
         if not isinstance(ext, Mapping):
             return None
-        block = ext.get("customScaffold")
+        block = ext.get(self.dialect.extension_key)
         if not isinstance(block, Mapping):
             return None
         return block
 
 
-def _aggregate(results: List[ExecutionResult]) -> ExecutionResult:
+def _aggregate(
+    results: List[ExecutionResult], *, plugin_name: str = "custom-scaffold-engine"
+) -> ExecutionResult:
     """Combine multiple ExecutionResults into one summary."""
     if not results:
         raise ValueError("cannot aggregate empty list")
     first = results[0]
     return ExecutionResult(
-        plugin="custom-scaffold-engine",
+        plugin=plugin_name,
         role="custom_scaffold",
         applied=sum(r.applied for r in results),
         failed=sum(r.failed for r in results),

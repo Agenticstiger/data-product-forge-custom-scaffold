@@ -39,6 +39,8 @@ from typing import Any, List, Mapping, Optional
 
 import yaml
 
+from .dialect import DEFAULT as DEFAULT_DIALECT
+from .dialect import ScaffoldDialect
 from .version import MANIFEST_API_VERSION
 
 MANIFEST_FILENAME = "fluid-scaffold.yaml"
@@ -171,15 +173,19 @@ class BundleManifest:
 
     @classmethod
     def from_dict(
-        cls, d: Mapping[str, Any], *, bundle_root: Optional[Path] = None
+        cls,
+        d: Mapping[str, Any],
+        *,
+        bundle_root: Optional[Path] = None,
+        dialect: ScaffoldDialect = DEFAULT_DIALECT,
     ) -> "BundleManifest":
         if not isinstance(d, Mapping):
             raise ManifestError(f"top-level manifest must be a mapping, got {type(d).__name__}")
-        api_version = str(d.get("apiVersion", MANIFEST_API_VERSION))
-        if api_version != MANIFEST_API_VERSION:
+        api_version = str(d.get("apiVersion", dialect.primary_api_version))
+        if api_version not in dialect.manifest_api_versions:
+            accepted = ", ".join(repr(v) for v in dialect.manifest_api_versions)
             raise ManifestError(
-                f"unsupported apiVersion {api_version!r} (this engine understands "
-                f"{MANIFEST_API_VERSION!r})"
+                f"unsupported apiVersion {api_version!r} (this dialect understands {accepted})"
             )
         bundle = BundleIdentity.from_dict(d.get("bundle") or {})
         if not bundle.name:
@@ -205,14 +211,16 @@ class BundleManifest:
         )
 
     @classmethod
-    def from_path(cls, bundle_root: Path) -> "BundleManifest":
+    def from_path(
+        cls, bundle_root: Path, *, dialect: ScaffoldDialect = DEFAULT_DIALECT
+    ) -> "BundleManifest":
         bundle_root = Path(bundle_root).resolve()
-        manifest_path = bundle_root / MANIFEST_FILENAME
+        manifest_path = bundle_root / dialect.manifest_filename
         if not manifest_path.is_file():
-            raise ManifestError(f"no {MANIFEST_FILENAME} found in {bundle_root}")
+            raise ManifestError(f"no {dialect.manifest_filename} found in {bundle_root}")
         with manifest_path.open("rb") as fh:
             data = yaml.safe_load(fh)
-        return cls.from_dict(data or {}, bundle_root=bundle_root)
+        return cls.from_dict(data or {}, bundle_root=bundle_root, dialect=dialect)
 
     def get_pattern(self, name: str) -> Optional[PatternEntry]:
         for p in self.patterns:
