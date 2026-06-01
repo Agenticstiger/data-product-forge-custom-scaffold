@@ -61,6 +61,11 @@ generate-custom-scaffold = "data_product_forge_custom_scaffold.cli:register"
 [project.entry-points."fluid_build.extension_validators"]
 customScaffold = "data_product_forge_custom_scaffold.validation:validate"
 
+# 3. JSON-Schema provider so the `fluid forge` copilot can natively generate
+#    and validate the `extensions.customScaffold` block (see B/forge-cli).
+[project.entry-points."fluid_build.extension_schemas"]
+customScaffold = "data_product_forge_custom_scaffold.validation:get_extension_schema"
+
 [project.urls]
 Documentation = "https://github.com/Agenticstiger/data-product-forge-custom-scaffold#readme"
 Repository = "https://github.com/Agenticstiger/data-product-forge-custom-scaffold"

@@ -1,0 +1,27 @@
+fluidVersion: "0.7.4"
+kind: DataProduct
+id: acme-widget
+name: ACME Widget
+description: Example product scaffolded via the ACME white-label dialect.
+domain: platform
+metadata:
+  owner:
+    team: platform
+    email: platform@acme.dev
+environments:
+  dev:
+    metadata:
+      labels:
+        cloud.accountId: "111"
+extensions:
+  # Note the ACME-branded extension key — NOT customScaffold.
+  acmeScaffold:
+    libraries:
+      - id: ci
+        source:
+          kind: path
+          path: ./bundle
+    patterns:
+      - use: "ci:basic"
+        variables:
+          teamName: acme-platform
