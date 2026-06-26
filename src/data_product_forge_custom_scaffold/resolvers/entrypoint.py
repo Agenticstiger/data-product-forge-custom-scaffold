@@ -27,12 +27,36 @@ author imports internally).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from .base import ResolutionError, ResolvedBundle, Resolver
 
 ENTRY_POINT_GROUP = "fluid_build.custom_scaffolds"
+
+
+def _plugin_allowed(name: str) -> bool:
+    """Mirror the FLUID CLI's operator allow/block policy (blocklist wins).
+
+    ``FLUID_PLUGINS_BLOCKLIST`` (comma-separated entry-point names) is always
+    honoured; if ``FLUID_PLUGINS_ALLOWLIST`` is set, only listed names load. This
+    is the SAME policy the CLI's ``fluid_build.plugin_manager.is_allowed`` enforces
+    for providers / validators / catalog / iac plugins — replicated here (zero
+    dependency on the CLI) so the scaffold engine's ``fluid_build.custom_scaffolds``
+    plugins are governed by the same trust boundary instead of bypassing it.
+    """
+    block = {
+        x.strip() for x in os.environ.get("FLUID_PLUGINS_BLOCKLIST", "").split(",") if x.strip()
+    }
+    if name in block:
+        return False
+    allow = {
+        x.strip() for x in os.environ.get("FLUID_PLUGINS_ALLOWLIST", "").split(",") if x.strip()
+    }
+    if allow and name not in allow:
+        return False
+    return True
 
 
 class EntryPointResolver(Resolver):
@@ -82,10 +106,20 @@ class EntryPointResolver(Resolver):
             )
 
         ep = matches[0]
+
+        # Operator allow/block gate — enforce BEFORE ep.load() so a blocked
+        # plugin's code never executes (the same trust boundary the CLI applies).
+        if not _plugin_allowed(name):
+            raise ResolutionError(
+                f"plugin {name!r} is blocked by the operator allow/block policy "
+                f"(FLUID_PLUGINS_ALLOWLIST / FLUID_PLUGINS_BLOCKLIST)"
+            )
+
         try:
             plugin_class = ep.load()
         except Exception as e:
-            raise ResolutionError(f"failed to load entry-point {name!r}: {e}") from e
+            # Type only — an arbitrary load exception's text may carry secrets.
+            raise ResolutionError(f"failed to load entry-point {name!r}: {type(e).__name__}") from e
 
         # Best-effort: capture the version of the providing distribution
         # for the lockfile / reporting.
