@@ -125,12 +125,29 @@ class Engine:
             try:
                 actions = scaffold.plan(contract)
             except PluginError as e:
+                # PluginError is user-actionable by the SDK contract — surface it.
                 raise EngineError(f"plan failed for pattern {use!r}: {e}") from e
+            except Exception as e:
+                # Unexpected: isolate and surface the exception TYPE only. An
+                # arbitrary exception's text may carry secrets (a credential in a
+                # message, a value from a stack); never interpolate it. The full
+                # traceback is still chained via ``from e``.
+                raise EngineError(f"plan failed for pattern {use!r}: {type(e).__name__}") from e
 
             all_actions.extend(actions)
 
             if not dry_run:
-                apply_results.append(scaffold.apply(actions))
+                # apply() runs plugin code that writes to disk. Isolate it the same
+                # way as plan() — a failing apply must not crash the run with a raw,
+                # possibly secret-bearing traceback.
+                try:
+                    apply_results.append(scaffold.apply(actions))
+                except PluginError as e:
+                    raise EngineError(f"apply failed for pattern {use!r}: {e}") from e
+                except Exception as e:
+                    raise EngineError(
+                        f"apply failed for pattern {use!r}: {type(e).__name__}"
+                    ) from e
 
         return EngineRunResult(
             actions=all_actions,
