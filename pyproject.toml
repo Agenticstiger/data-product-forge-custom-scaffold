@@ -55,7 +55,7 @@ dev = [
 # test_fluid_cli_cross_package.py). Kept separate from `dev` so the light unit
 # suite stays fast and host-free.
 cli-integration = [
-    "data-product-forge",
+    "data-product-forge>=0.9",  # the import-based extension_schemas seam needs host >=0.9
 ]
 
 # ─── How the FLUID CLI discovers this engine ────────────────────────
