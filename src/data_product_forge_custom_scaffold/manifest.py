@@ -92,12 +92,28 @@ class TemplateEntry:
 
 @dataclass(frozen=True)
 class PatternEntry:
-    """One pattern declaration."""
+    """One pattern declaration from a bundle's ``fluid-scaffold.yaml``.
+
+    Field status — what the engine actually does with each:
+
+    * ``name`` / ``description`` — pattern identity.
+    * ``required_contract_fields`` — **enforced**: a fail-fast presence check on
+      the contract before rendering (see ``TemplatedCustomScaffold``).
+    * ``templates`` — **enforced**: the file-emission directives.
+    * ``variables_schema`` (the ``variables`` block) — **reserved**: parsed, but
+      NOT yet validated against the user-supplied variables. Declaring it has no
+      effect today; per-variable validation is a planned feature.
+    * ``supported_product_types`` / ``supported_ci_systems`` — **advisory**
+      declarative metadata for catalogs and tooling; NOT enforced by the engine
+      (it receives no target product-type / CI-system to gate against).
+    """
 
     name: str
     description: str = ""
+    # Advisory metadata — not enforced by the engine (see class docstring).
     supported_product_types: List[str] = field(default_factory=list)
     supported_ci_systems: List[str] = field(default_factory=list)
+    # Reserved — parsed but not yet validated against user variables.
     variables_schema: Mapping[str, Any] = field(default_factory=dict)
     required_contract_fields: List[str] = field(default_factory=list)
     templates: List[TemplateEntry] = field(default_factory=list)
