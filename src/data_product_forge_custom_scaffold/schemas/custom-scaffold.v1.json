@@ -107,15 +107,18 @@
           },
           "variables": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "description": "User-supplied variable overrides for the pattern, merged into the Jinja render context."
           },
           "when": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "description": "RESERVED — accepted but NOT evaluated by this engine version. Conditional file emission is a planned feature; a `when` block currently has no effect. For conditional content today, branch inside a Jinja template."
           },
           "environments": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "description": "RESERVED — accepted but NOT injected into the render context by this engine version. For per-environment output, iterate a `variables` value with Jinja (`{% for env in ... %}`) inside a single template."
           }
         }
       }
