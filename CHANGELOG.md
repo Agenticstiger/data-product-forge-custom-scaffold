@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-27
+
+### Changed
+
+- **Two formerly-reserved manifest fields are now enforced** at plan time
+  (closing a silent-acceptance gap where bad input flowed into templates):
+  - **`variables`** — the user-supplied variables are validated against the
+    pattern's `variables` JSON Schema. No schema declared → no-op (every existing
+    bundle is preserved). A violating override is a `PluginError` (with the
+    offending dotted path); a malformed bundle schema is a `ManifestError`.
+  - **`supportedProductTypes`** — if a pattern declares it, the pattern is
+    rejected for a contract whose `metadata.productType` isn't listed. No list →
+    no-op; a contract with no product type is not gated. `supportedCISystems`
+    remains advisory.
+
+  This can newly reject a contract that was *silently* generating from invalid
+  variables or an unintended product type before — hence the minor bump.
+
+### Internal
+
+- A `fluid validate <bad-customScaffold-contract>` exit-code smoke in the
+  cli-integration job, for symmetry with the `fluid custom-scaffold` tests.
+
 ## [0.3.1] — 2026-06-27
 
 ### Fixed
