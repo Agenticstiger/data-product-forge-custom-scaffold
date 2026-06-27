@@ -50,6 +50,13 @@ dev = [
     "ruff>=0.1.0",
     "black>=23.0",
 ]
+# The FLUID host CLI, for the cross-package integration tests that drive
+# `fluid custom-scaffold` through the real host dispatch (tests/integration/
+# test_fluid_cli_cross_package.py). Kept separate from `dev` so the light unit
+# suite stays fast and host-free.
+cli-integration = [
+    "data-product-forge",
+]
 
 # ─── How the FLUID CLI discovers this engine ────────────────────────
 #

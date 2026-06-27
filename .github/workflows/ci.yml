@@ -56,6 +56,19 @@ jobs:
       - name: Pytest
         run: pytest tests/ -v
 
+  cli-integration:
+    name: Cross-package CLI integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install engine + the FLUID host CLI
+        run: pip install -e ".[dev,cli-integration]"
+      - name: Drive `fluid custom-scaffold` through the real host dispatch
+        run: pytest tests/integration/test_fluid_cli_cross_package.py -v
+
   build:
     name: Build Check
     runs-on: ubuntu-latest
