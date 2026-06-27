@@ -103,7 +103,11 @@ def make_register(
                 f"AI-generated contracts include a valid extensions.{dialect.extension_key} block."
             ),
         )
-        parser.set_defaults(func=lambda args: run(args, dialect=dialect))
+        # The FLUID CLI dispatcher invokes a registered command as
+        # ``func(args, logger)`` (two positional args); accept and ignore any
+        # extra positionals so the command works both via ``fluid`` and when
+        # called directly with just ``args``.
+        parser.set_defaults(func=lambda args, *_: run(args, dialect=dialect))
 
     return register
 
