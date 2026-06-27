@@ -86,3 +86,61 @@ def test_fluid_custom_scaffold_dry_run(tmp_path):
         "--dry-run",
     )
     assert r.returncode == 0, f"rc={r.returncode}\nstderr={r.stderr}\nstdout={r.stdout[:800]}"
+
+
+# ── the other two cross-package seams: extension_schemas + extension_validators ──
+#
+# The scaffold also registers fluid_build.extension_schemas (copilot grounding)
+# and fluid_build.extension_validators (`fluid validate`). These drive the host's
+# REAL loader/caller (iter_extension_schemas / run_extension_validators) against
+# the scaffold's entry points, so a signature/return-shape drift on either seam
+# fails CI here rather than silently degrading validation or copilot grounding.
+
+
+def test_host_loads_scaffold_extension_schema():
+    from fluid_build.extension_schemas import iter_extension_schemas
+
+    schemas = iter_extension_schemas()
+    assert "customScaffold" in schemas, f"host did not load the scaffold schema: {list(schemas)}"
+    schema = schemas["customScaffold"]
+    assert isinstance(schema, dict) and schema, "scaffold extension schema must be a non-empty dict"
+
+
+def test_host_validator_flags_invalid_customscaffold_block():
+    from fluid_build.extension_schemas import run_extension_validators
+
+    # A pattern missing the required 'use' must be rejected by the scaffold validator.
+    contract = {
+        "extensions": {
+            "customScaffold": {
+                "libraries": [{"id": "x", "source": {"kind": "path", "path": "./b"}}],
+                "patterns": [{}],
+            }
+        }
+    }
+    errors = run_extension_validators(contract)
+    # Assert the REAL schema message ('use' is a required property), not just any
+    # error: a signature break would surface as "validator … raised", which would
+    # not mention the missing field — so this distinguishes "really validated"
+    # from "the seam blew up".
+    assert any("use" in e and "required" in e for e in errors), f"not real validation: {errors}"
+
+
+def test_host_validator_passes_valid_customscaffold_block():
+    from fluid_build.extension_schemas import run_extension_validators
+
+    contract = {
+        "extensions": {
+            "customScaffold": {
+                "libraries": [
+                    {
+                        "id": "x",
+                        "source": {"kind": "git", "url": "https://github.com/o/r", "ref": "v1"},
+                    }
+                ],
+                "patterns": [{"use": "x:p"}],
+            }
+        }
+    }
+    cs_errors = [e for e in run_extension_validators(contract) if "customScaffold" in e]
+    assert not cs_errors, f"valid block produced errors: {cs_errors}"
