@@ -196,3 +196,50 @@ def test_fluid_custom_scaffold_update_flag_via_dispatch(tmp_path):
     r = _fluid("custom-scaffold", "--contract", str(c), "--output", str(out), "--update")
     assert r.returncode == 0, f"--update rc={r.returncode}\nstderr={r.stderr}\nstdout={r.stdout}"
     assert "Updated" in r.stdout
+
+
+# ── `fluid validate` must reject a bad customScaffold block (the validator seam,
+# end-to-end through the host's validate command, not just run_extension_validators) ──
+
+
+def _write_bad_customscaffold_contract(tmp_path) -> Path:
+    # A contract with an invalid customScaffold block (a pattern missing the
+    # required `use`). `fluid validate` must surface the scaffold validator's
+    # specific error and exit non-zero — the assertion targets the
+    # customScaffold message (not just "validation failed"), so it still proves
+    # the validator seam ran even alongside any core-schema errors.
+    contract = tmp_path / "bad.fluid.yaml"
+    contract.write_text(
+        textwrap.dedent("""\
+            fluidVersion: "0.7.4"
+            kind: DataProduct
+            id: badcs
+            name: Bad CS
+            description: invalid customScaffold block
+            metadata: {owner: {team: t, email: t@t.t}}
+            environments:
+              dev: {metadata: {labels: {cloud.region: us-east-1}}}
+            extensions:
+              customScaffold:
+                libraries:
+                  - id: ref
+                    source: {kind: path, path: ./does-not-matter}
+                patterns:
+                  - {}
+            """),
+        encoding="utf-8",
+    )
+    return contract
+
+
+def test_fluid_validate_rejects_bad_customscaffold(tmp_path):
+    c = _write_bad_customscaffold_contract(tmp_path)
+    r = _fluid("validate", str(c))
+    assert r.returncode != 0, f"validate should reject the bad block; rc={r.returncode}\n{r.stdout}"
+    # The REAL scaffold-validator message (missing required 'use'), not a generic
+    # crash — distinguishes "really validated the customScaffold block" from "the
+    # validate command blew up for another reason".
+    combined = (r.stdout + r.stderr).lower()
+    assert "use" in combined and (
+        "required" in combined or "customscaffold" in combined
+    ), f"expected the scaffold validator's 'use is required' error:\n{r.stdout}\n{r.stderr}"
