@@ -28,6 +28,7 @@ import yaml
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
 from .engine import Engine, EngineError
+from .update import UpdateError
 from .validation import make_schema_provider
 
 
@@ -90,6 +91,20 @@ def make_register(
             ),
         )
         parser.add_argument(
+            "--update",
+            action="store_true",
+            help=(
+                "Update an existing output to the evolved template: re-render at the "
+                "new ref and 3-way-merge onto your working tree (preserves edits, writes "
+                "conflict markers where they overlap). Requires a fluid-scaffold.lock."
+            ),
+        )
+        parser.add_argument(
+            "--target",
+            default=None,
+            help="With --update: the git ref/commit to update TO (default: the contract's ref).",
+        )
+        parser.add_argument(
             "--json",
             action="store_true",
             help="Emit machine-readable JSON result instead of a human summary.",
@@ -138,6 +153,9 @@ def run(args: argparse.Namespace, *, dialect: ScaffoldDialect = DEFAULT_DIALECT)
         dialect=dialect,
     )
 
+    if getattr(args, "update", False):
+        return _run_update(engine, contract, args=args, output_root=output_root)
+
     try:
         result = engine.run(
             contract,
@@ -158,6 +176,44 @@ def run(args: argparse.Namespace, *, dialect: ScaffoldDialect = DEFAULT_DIALECT)
     if result.apply_result is not None and result.apply_result.failed > 0:
         return 3
     return 0
+
+
+def _run_update(engine: Engine, contract: Mapping[str, Any], *, args, output_root: Path) -> int:
+    """Dispatch ``--update`` and render its result. Returns 4 on conflicts."""
+    try:
+        result = engine.update(
+            contract,
+            target_ref=getattr(args, "target", None),
+            dry_run=args.dry_run,
+        )
+    except (EngineError, UpdateError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "update": True,
+                    "dry_run": args.dry_run,
+                    "files": [{"path": f.path, "status": f.status} for f in result.files],
+                    "conflicts": [f.path for f in result.conflicts],
+                },
+                indent=2,
+            )
+        )
+    else:
+        verb = "Would update" if args.dry_run else "Updated"
+        print(f"{verb} {output_root}:")
+        for f in sorted(result.files, key=lambda f: f.path):
+            print(f"  {f.status:16} {f.path}")
+        if result.conflicts:
+            print(
+                f"\n⚠ {len(result.conflicts)} file(s) have conflict markers "
+                "(<<<<<<< / >>>>>>>) — resolve them, then commit."
+            )
+
+    return 4 if result.conflicts else 0
 
 
 def _print_schema(*, dialect: ScaffoldDialect, as_json: bool) -> int:

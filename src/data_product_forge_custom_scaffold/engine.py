@@ -32,9 +32,10 @@ from fluid_sdk import CustomScaffold, ExecutionResult, PluginError
 
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
-from .lockfile import build_lock, pin_source, read_lock, write_lock
+from .lockfile import LOCKFILE_NAME, build_lock, pin_source, read_lock, write_lock
 from .resolvers import ResolvedBundle, resolve_bundle
 from .templated import TemplatedCustomScaffold
+from .update import UpdateError, UpdateResult, actions_to_render, merge_renders
 from .version import ENGINE_VERSION
 
 LOG = logging.getLogger(__name__)
@@ -191,6 +192,88 @@ class Engine:
             resolved_libraries=resolved,
             lockfile=lockfile_path,
         )
+
+    def update(
+        self,
+        contract: Mapping[str, Any],
+        *,
+        target_ref: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> UpdateResult:
+        """Update an already-generated output to an evolved template.
+
+        Renders each library's template TWICE — at the **locked** commit (from
+        ``fluid-scaffold.lock``) and at the **new** target (``target_ref`` for
+        git sources, else the contract's current ref) — and 3-way-merges the new
+        render onto the working tree, preserving the user's edits and writing
+        Git-style conflict markers where they overlap. On success the lock is
+        refreshed to the new resolution. Raises :class:`UpdateError` if there is
+        no lockfile to update from.
+        """
+        block = self._extract_block(contract)
+        if block is None:
+            raise UpdateError("contract has no extensions customScaffold block to update")
+
+        lock = read_lock(self.output_root)
+        locked_libs = lock.get("libraries") or {}
+        if not locked_libs:
+            raise UpdateError(
+                f"no {LOCKFILE_NAME} found under {self.output_root} — generate first, then update"
+            )
+
+        # Resolve OLD (locked commit) and NEW (target ref) for each library.
+        old_resolved: Dict[str, ResolvedBundle] = {}
+        new_resolved: Dict[str, ResolvedBundle] = {}
+        for lib in block.get("libraries", []):
+            lib_id = lib["id"]
+            source = lib["source"]
+            old_source = pin_source(source, locked_libs.get(lib_id) or {})
+            new_source = dict(source)
+            if target_ref and new_source.get("kind") == "git":
+                new_source["ref"] = target_ref
+            old_resolved[lib_id] = resolve_bundle(old_source, contract_dir=self.contract_dir)
+            new_resolved[lib_id] = resolve_bundle(new_source, contract_dir=self.contract_dir)
+
+        # Render both versions in memory (plan emits the rendered content).
+        old_render: Dict[str, bytes] = {}
+        new_render: Dict[str, bytes] = {}
+        for pattern_decl in block.get("patterns", []):
+            use = pattern_decl["use"]
+            lib_id, pattern_name = use.split(":", 1)
+            variables = pattern_decl.get("variables") or {}
+            if lib_id in old_resolved:
+                old_scaffold = self._instantiate_scaffold(
+                    old_resolved[lib_id], pattern_name=pattern_name, variables=variables
+                )
+                old_render.update(actions_to_render(old_scaffold.plan(contract)))
+            if lib_id in new_resolved:
+                new_scaffold = self._instantiate_scaffold(
+                    new_resolved[lib_id], pattern_name=pattern_name, variables=variables
+                )
+                new_render.update(actions_to_render(new_scaffold.plan(contract)))
+
+        result = merge_renders(
+            old=old_render,
+            new=new_render,
+            output_root=self.output_root,
+            dry_run=dry_run,
+        )
+
+        # Refresh the lock to the new resolution (unless dry-run).
+        if not dry_run and new_resolved:
+            try:
+                write_lock(
+                    self.output_root,
+                    build_lock(
+                        engine_version=ENGINE_VERSION,
+                        resolved=new_resolved,
+                        patterns=block.get("patterns", []),
+                    ),
+                )
+            except OSError as e:
+                LOG.warning("could not refresh lockfile: %s", type(e).__name__)
+
+        return result
 
     # ── Internal helpers ────────────────────────────────────────────
 
