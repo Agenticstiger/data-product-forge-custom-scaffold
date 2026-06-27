@@ -58,18 +58,21 @@ def test_full_round_trip(tmp_path: Path) -> None:
     engine = Engine(output_root=out_a)
     result = engine.run(CONTRACT)
 
-    # 2 rendered templates + 1 static file = 3 files
-    expected_paths = {
+    # 2 rendered templates + 1 static file + the reproducibility lock = 4 files
+    rendered_paths = {
         "README.md",
         ".gitlab-ci.yml",
         "docs/runbook.md",
     }
+    expected_paths = rendered_paths | {"fluid-scaffold.lock"}
     actual_paths = {p.relative_to(out_a).as_posix() for p in out_a.rglob("*") if p.is_file()}
     assert actual_paths == expected_paths, f"unexpected file set: {actual_paths}"
 
     assert result.apply_result is not None
     assert result.apply_result.failed == 0
-    assert result.apply_result.applied == len(expected_paths)
+    # apply_result counts plugin-applied files; the lock is written by the engine.
+    assert result.apply_result.applied == len(rendered_paths)
+    assert result.lockfile == out_a / "fluid-scaffold.lock"
 
     # README content uses the variable override
     readme = (out_a / "README.md").read_text(encoding="utf-8")

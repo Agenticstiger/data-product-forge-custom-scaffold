@@ -32,8 +32,10 @@ from fluid_sdk import CustomScaffold, ExecutionResult, PluginError
 
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
+from .lockfile import build_lock, write_lock
 from .resolvers import ResolvedBundle, resolve_bundle
 from .templated import TemplatedCustomScaffold
+from .version import ENGINE_VERSION
 
 LOG = logging.getLogger(__name__)
 
@@ -45,6 +47,9 @@ class EngineRunResult:
     actions: List[Dict[str, Any]] = field(default_factory=list)
     apply_result: Optional[ExecutionResult] = None
     resolved_libraries: Dict[str, ResolvedBundle] = field(default_factory=dict)
+    # Path to the fluid-scaffold.lock written for this run (None on dry-run or
+    # when nothing was resolved).
+    lockfile: Optional[Path] = None
 
 
 class EngineError(RuntimeError):
@@ -149,6 +154,21 @@ class Engine:
                         f"apply failed for pattern {use!r}: {type(e).__name__}"
                     ) from e
 
+        # Record what generated this output, for reproducible re-runs (copier's
+        # answers-file model). Best-effort: a lock-write failure must not fail an
+        # otherwise-successful generation.
+        lockfile_path: Optional[Path] = None
+        if not dry_run and resolved:
+            try:
+                lock = build_lock(
+                    engine_version=ENGINE_VERSION,
+                    resolved=resolved,
+                    patterns=block.get("patterns", []),
+                )
+                lockfile_path = write_lock(self.output_root, lock)
+            except OSError as e:
+                LOG.warning("could not write lockfile: %s", type(e).__name__)
+
         return EngineRunResult(
             actions=all_actions,
             apply_result=(
@@ -157,6 +177,7 @@ class Engine:
                 else None
             ),
             resolved_libraries=resolved,
+            lockfile=lockfile_path,
         )
 
     # ── Internal helpers ────────────────────────────────────────────
