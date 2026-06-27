@@ -32,3 +32,15 @@ def test_no_python_version_below_requires_python(doc: Path):
     text = doc.read_text(encoding="utf-8")
     for stale in ("Python 3.9", ">=3.9", ">= 3.9"):
         assert stale not in text, f"{doc.name} advertises {stale!r} below requires-python >=3.10"
+
+
+@pytest.mark.parametrize("doc", DOC_FILES, ids=lambda p: p.name)
+def test_correct_command_name(doc: Path):
+    # The command is registered top-level as `fluid custom-scaffold` (the entry
+    # point name `generate-custom-scaffold` is NOT the invocation). Docs must not
+    # advertise `fluid generate custom-scaffold`, which does not exist.
+    text = doc.read_text(encoding="utf-8")
+    assert "generate custom-scaffold" not in text, (
+        f"{doc.name} says `fluid generate custom-scaffold` — the real command is "
+        "`fluid custom-scaffold` (verified: the former does not exist)"
+    )

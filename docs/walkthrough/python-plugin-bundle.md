@@ -230,7 +230,7 @@ extensions:
 Run:
 
 ```bash
-fluid generate custom-scaffold
+fluid custom-scaffold
 ```
 
 The engine:

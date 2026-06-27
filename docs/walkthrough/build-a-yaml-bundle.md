@@ -170,7 +170,7 @@ extensions:
           ciStage: "build-and-deploy"
 YAML
 
-fluid generate custom-scaffold
+fluid custom-scaffold
 ```
 
 You'll see:
@@ -205,7 +205,7 @@ The engine copies every file under `static/` byte-for-byte, preserving paths. No
 ```bash
 mkdir /tmp/first-run && cp -r * /tmp/first-run/
 rm README.md .gitlab-ci.yml
-fluid generate custom-scaffold
+fluid custom-scaffold
 diff -r . /tmp/first-run/
 # (no output — byte-identical)
 ```
