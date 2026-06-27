@@ -27,11 +27,6 @@ from functools import lru_cache
 from importlib import resources
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-try:
-    from jsonschema import Draft7Validator
-except ImportError:
-    Draft7Validator = None  # type: ignore[assignment]
-
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
 
@@ -110,6 +105,16 @@ def make_validator(
         block = extensions.get(key)
         if block is None:
             return  # not opted in
+
+        # Lazy import: keep jsonschema OFF the `fluid --help` / plugin-registration
+        # path. forge-cli eagerly loads every `fluid_build.commands` registrar to
+        # build the parser, and its startup-budget guard
+        # (tests/perf/test_startup_budget.py) forbids importing jsonschema there.
+        # It is only needed when a customScaffold block is actually validated.
+        try:
+            from jsonschema import Draft7Validator
+        except ImportError:
+            Draft7Validator = None  # type: ignore[assignment]  # noqa: N806
 
         if Draft7Validator is None:
             errors.append(

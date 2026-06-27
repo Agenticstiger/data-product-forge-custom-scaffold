@@ -37,11 +37,6 @@ from .manifest import BundleManifest, ManifestError, PatternEntry
 from .renderer import Renderer
 from .version import ENGINE_VERSION
 
-try:
-    from jsonschema import Draft7Validator
-except ImportError:  # jsonschema is a hard runtime dep; this branch is defensive only
-    Draft7Validator = None  # type: ignore[assignment]
-
 
 class TemplatedCustomScaffold(CustomScaffold):
     """A :class:`CustomScaffold` driven by a ``fluid-scaffold.yaml`` manifest.
@@ -178,6 +173,14 @@ class TemplatedCustomScaffold(CustomScaffold):
         schema is the bundle author's error (``ManifestError``); an override that
         violates a valid schema is the contract author's error (``PluginError``).
         """
+        # Lazy import: keep jsonschema OFF the `fluid --help` / plugin-registration
+        # path (forge-cli eagerly loads this registrar and its startup-budget guard
+        # forbids importing jsonschema there); only needed to validate bundle vars.
+        try:
+            from jsonschema import Draft7Validator
+        except ImportError:  # jsonschema is a hard runtime dep; defensive only
+            Draft7Validator = None  # type: ignore[assignment]  # noqa: N806
+
         schema = self._pattern.variables_schema
         if not schema or Draft7Validator is None:
             return
