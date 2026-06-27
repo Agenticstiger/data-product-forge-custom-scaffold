@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-27
+
+### Fixed
+
+- **Defer the `jsonschema` import off the plugin-registration path.** forge-cli
+  eagerly loads this plugin's `fluid_build.commands` registrar to build the
+  parser for `fluid --help`, and its startup-budget guard forbids importing
+  `jsonschema` there. Two module-level `from jsonschema import Draft7Validator`
+  imports (`validation.py` and `templated.py`) are now function-local — pulled in
+  only when a `customScaffold` block or a bundle's variables are actually
+  validated — so installing this plugin no longer puts `jsonschema` on the
+  `fluid --help` import path. (#28)
+
 ## [0.4.0] — 2026-06-27
 
 ### Changed
