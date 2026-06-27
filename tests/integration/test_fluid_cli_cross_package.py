@@ -144,3 +144,55 @@ def test_host_validator_passes_valid_customscaffold_block():
     }
     cs_errors = [e for e in run_extension_validators(contract) if "customScaffold" in e]
     assert not cs_errors, f"valid block produced errors: {cs_errors}"
+
+
+# ── --pin / --update must reach the engine through the REAL CLI dispatch ──
+#
+# Both flags were guarded only by direct Engine.run(pin=)/Engine.update() unit
+# calls; a host arg-wiring drift (flag not plumbed through the dispatcher) would
+# escape. These drive them via `python -m fluid_build.cli`.
+
+
+def _write_path_contract(tmp_path) -> Path:
+    bundle = FIXTURES / "reference_bundle"
+    contract = tmp_path / "contract.fluid.yaml"
+    contract.write_text(
+        textwrap.dedent(f"""\
+            fluidVersion: "0.7.4"
+            kind: DataProduct
+            id: smoke
+            name: Smoke
+            description: pin/update CLI dispatch smoke
+            metadata: {{owner: {{team: t, email: t@t.t}}}}
+            environments:
+              dev: {{metadata: {{labels: {{cloud.region: us-east-1}}}}}}
+            extensions:
+              customScaffold:
+                libraries:
+                  - id: ref
+                    source: {{kind: path, path: "{bundle}"}}
+                patterns:
+                  - use: ref:basic
+                    variables: {{teamName: smoke}}
+            """),
+        encoding="utf-8",
+    )
+    return contract
+
+
+def test_fluid_custom_scaffold_pin_flag_via_dispatch(tmp_path):
+    c = _write_path_contract(tmp_path)
+    out = tmp_path / "out"
+    assert _fluid("custom-scaffold", "--contract", str(c), "--output", str(out)).returncode == 0
+    r = _fluid("custom-scaffold", "--contract", str(c), "--output", str(out), "--pin")
+    assert r.returncode == 0, f"--pin rc={r.returncode}\nstderr={r.stderr}"
+
+
+def test_fluid_custom_scaffold_update_flag_via_dispatch(tmp_path):
+    c = _write_path_contract(tmp_path)
+    out = tmp_path / "out"
+    assert _fluid("custom-scaffold", "--contract", str(c), "--output", str(out)).returncode == 0
+    # No edits + unchanged template → 'unchanged', rc 0 (not a conflict).
+    r = _fluid("custom-scaffold", "--contract", str(c), "--output", str(out), "--update")
+    assert r.returncode == 0, f"--update rc={r.returncode}\nstderr={r.stderr}\nstdout={r.stdout}"
+    assert "Updated" in r.stdout

@@ -95,8 +95,13 @@ def three_way_merge(base: bytes, ours: bytes, theirs: bytes) -> tuple[bytes, boo
             ],
             capture_output=True,
         )
-        # git merge-file: rc 0 = clean, rc > 0 = number of conflicts, rc < 0 = error.
-        if proc.returncode < 0:
+        # git merge-file: rc 0 = clean, rc > 0 = number of conflicts. A real
+        # error (e.g. unreadable input) exits 255 with an empty merge on stdout
+        # and a message on stderr — distinguish that from conflicts (which carry
+        # the merged content) so a failure raises instead of masquerading as a
+        # conflict. A signal kill shows up as a negative returncode.
+        errored = proc.returncode < 0 or (proc.returncode != 0 and not proc.stdout and proc.stderr)
+        if errored:
             raise UpdateError(
                 f"git merge-file failed: {proc.stderr.decode('utf-8', 'replace').strip()}"
             )
