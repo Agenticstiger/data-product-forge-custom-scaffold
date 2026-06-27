@@ -40,7 +40,7 @@ build-backend = "setuptools.build_meta"
 name = "my-org-scaffold"
 version = "0.1.0"
 description = "My org's standard data-product scaffold"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = ["fluid-sdk>=0.1.0"]
 
 [project.entry-points."fluid_build.custom_scaffolds"]
