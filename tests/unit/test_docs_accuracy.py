@@ -17,6 +17,21 @@ DOCS = sorted((ROOT / "docs").rglob("*.md")) + [ROOT / "README.md"]
 DOC_FILES = [p for p in DOCS if p.is_file()]
 
 
+def test_reproducibility_feature_is_documented():
+    # The headline reproducibility feature (lockfile / --pin / --update) must be
+    # discoverable in the docs — a feature shipped invisible to users is not
+    # world-class. Guards against the docs silently lagging the code.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for token in ("--update", "--pin", "fluid-scaffold.lock"):
+        assert token in readme, f"README must document {token!r}"
+
+    walkthrough = ROOT / "docs" / "walkthrough" / "reproducible-updates.md"
+    assert walkthrough.is_file(), "the reproducibility/update walkthrough must exist"
+    text = walkthrough.read_text(encoding="utf-8")
+    for token in ("--update", "--pin", "3-way", "fluid-scaffold.lock"):
+        assert token in text, f"the reproducibility walkthrough must cover {token!r}"
+
+
 @pytest.mark.parametrize("doc", DOC_FILES, ids=lambda p: p.name)
 def test_no_stale_github_org(doc: Path):
     # The canonical repo is github.com/Agenticstiger/...; the old fluid-build

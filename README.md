@@ -113,6 +113,11 @@ fluid custom-scaffold [OPTIONS]
       --dry-run          Plan only — print the file list, write nothing.
       --pattern USE      Restrict to specific patterns (repeatable)
       --lib ID           Restrict to specific library ids (repeatable)
+      --pin              Reproducible re-run: resolve git sources to the commit
+                         recorded in fluid-scaffold.lock (not the floating ref).
+      --update           Update an existing output to the evolved template —
+                         3-way merge that preserves your edits (see below).
+      --target REF       With --update: the git ref/commit to update to.
       --json             Emit JSON instead of human output
 ```
 
@@ -124,6 +129,34 @@ Exit codes:
 | `1` | bad CLI args / contract not found |
 | `2` | engine error (resolution, plan, or apply failed) |
 | `3` | at least one `apply()` action failed |
+| `4` | `--update` completed with merge conflicts (markers written; resolve them) |
+
+## Reproducibility & updates
+
+Every successful generation writes a **`fluid-scaffold.lock`** at the output
+root (commit it alongside the generated files). It records, per resolved
+library, the exact commit it resolved to, plus the patterns and variables used —
+the same model as copier's `.copier-answers.yml`.
+
+```bash
+# Generate — writes the output + fluid-scaffold.lock
+fluid custom-scaffold -c contract.fluid.yaml -o ./my-project
+
+# Reproducible re-run — resolve git sources to the LOCKED commit, not the
+# moving ref. (npm-ci / poetry --frozen semantics; non-git sources can't be
+# reproducibly pinned and the engine says so.)
+fluid custom-scaffold -c contract.fluid.yaml -o ./my-project --pin
+
+# Update — the template evolved? Re-render at the new ref and 3-way-merge it
+# onto your working tree, preserving your edits. Non-overlapping changes merge
+# cleanly; overlaps get Git-style conflict markers (exit 4).
+fluid custom-scaffold -c contract.fluid.yaml -o ./my-project --update
+```
+
+`--update` renders the template at the **locked** commit (the baseline you
+started from) and at the **new** ref, then merges with `git merge-file`
+(base = old render, ours = your file, theirs = new render). On success the lock
+advances. Full walkthrough: [`docs/walkthrough/reproducible-updates.md`](docs/walkthrough/reproducible-updates.md).
 
 ## Documentation
 
@@ -132,6 +165,7 @@ Exit codes:
 | **[`docs/getting-started/`](docs/getting-started/README.md)** | 5-min: install, run against a fixture bundle, see the output |
 | **[`docs/walkthrough/build-a-yaml-bundle.md`](docs/walkthrough/build-a-yaml-bundle.md)** | 15-min: author your own YAML/Jinja bundle from scratch |
 | **[`docs/walkthrough/from-git-bundle.md`](docs/walkthrough/from-git-bundle.md)** | 5-min: consume a public bundle straight from a git repo |
+| **[`docs/walkthrough/reproducible-updates.md`](docs/walkthrough/reproducible-updates.md)** | The lockfile, `--pin`, and `--update` (3-way merge) — reproducibility & updates |
 | **[`docs/reference/manifest-format.md`](docs/reference/manifest-format.md)** | Full `fluid-scaffold.yaml` reference |
 
 ## License

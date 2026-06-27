@@ -1,4 +1,4 @@
-"""``fluid generate custom-scaffold`` subcommand.
+"""``fluid custom-scaffold`` subcommand.
 
 Registered as a CLI plugin via:
 
@@ -37,7 +37,7 @@ def make_register(
 ) -> Callable[[argparse._SubParsersAction], None]:
     """Build a ``register(subparsers)`` callable bound to *dialect*.
 
-    The returned function registers a ``fluid generate <dialect.command_name>``
+    The returned function registers a ``fluid <dialect.command_name>``
     subcommand whose defaults (contract path, help text, extension key) come
     from *dialect*, and wires ``func`` to :func:`run` bound to the same dialect.
     """
@@ -128,12 +128,12 @@ def make_register(
 
 
 # Back-compat: the historical entry-point target, bound to the built-in fluid
-# dialect (``fluid generate custom-scaffold``).
+# dialect (``fluid custom-scaffold``).
 register = make_register(DEFAULT_DIALECT)
 
 
 def run(args: argparse.Namespace, *, dialect: ScaffoldDialect = DEFAULT_DIALECT) -> int:
-    """Implementation of ``fluid generate <dialect.command_name>``."""
+    """Implementation of ``fluid <dialect.command_name>``."""
     # --print-schema short-circuits before any contract is required, so an
     # author (or an agent priming the copilot) can fetch the schema anywhere.
     if getattr(args, "print_schema", False):
