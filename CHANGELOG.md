@@ -6,6 +6,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-27
+
+### Fixed
+
+- **Git resolver now supports SHA pinning** (was broken). `git clone --branch
+  <ref>` rejects a raw commit SHA, so a contract pinned to a full commit id —
+  the only truly reproducible git ref — hard-failed. A full-length SHA
+  (40-hex / 64-hex) is now fetched and checked out (`git init` +
+  `git fetch --depth 1 <url> <sha>` + `git checkout FETCH_HEAD`, with a
+  full-fetch fallback for servers that disallow fetch-by-SHA). Tags and branches
+  keep the cheap shallow `--branch` clone. The token-bearing URL is passed inline
+  to `git fetch`, so it is no longer persisted to `.git/config`.
+- **Docs:** corrected the clone URLs (the `github.com/fluid-build/…` org 404s;
+  the canonical org is `Agenticstiger`) and the Python prerequisite (`3.9+` →
+  `3.10+`, matching `requires-python`).
+
+### Changed
+
+- **Honest schema for unenforced fields.** `patterns[].when` and
+  `patterns[].environments` (contract side) and the bundle manifest's
+  `variables` / `supportedProductTypes` / `supportedCISystems` are accepted but
+  not acted on by the engine; they are now documented as **reserved** /
+  **advisory** so authors get no silent no-op surprise. `requiredContractFields`
+  and `templates` remain enforced.
+
+### Security
+
+- **Engine isolates and redacts plugin failures.** `plan()` / `apply()` now run
+  under per-call isolation; unexpected (non-`PluginError`) exceptions are logged
+  by type only, so plugin-supplied text never propagates to the caller.
+- **Operator allow/block governs custom-scaffold loading.** The
+  `custom_scaffolds` entry-point resolver gates each plugin through the same
+  `FLUID_PLUGINS_ALLOWLIST` / `FLUID_PLUGINS_BLOCKLIST` policy before load.
+
 ## [0.1.1] — 2026-06-01
 
 ### Added
