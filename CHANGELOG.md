@@ -6,6 +6,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-27
+
+### Fixed
+
+- **`--update` merge-error handling.** A genuine `git merge-file` failure (exit
+  255 with an empty merge) was being misread as "a conflict"; it now raises
+  `UpdateError`, while real conflicts (which carry the merged content) are
+  unaffected.
+
+### Documentation
+
+- **Documented the reproducibility feature.** A new README "Reproducibility &
+  updates" section and a full
+  [`docs/walkthrough/reproducible-updates.md`](docs/walkthrough/reproducible-updates.md)
+  walkthrough cover the lockfile, `--pin`, and `--update` (3-way merge) — with a
+  guard test so it can't silently go undocumented again.
+
+### Internal
+
+- `--pin` / `--update` are now exercised through the **real CLI dispatch** (not
+  just the Engine API), and a **nightly** CI run exercises the cross-package
+  contract against the latest published host, so host dispatch / entry-point
+  drift is caught on the host's release cadence.
+
 ## [0.3.0] — 2026-06-27
 
 ### Added
