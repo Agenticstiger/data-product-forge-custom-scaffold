@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-27
+
+### Added
+
+- **`fluid custom-scaffold --update` — copier-style update with a 3-way merge.**
+  Update an already-generated project to an evolved template while preserving
+  your edits: the engine renders the template at the **locked** commit (base) and
+  the **new** ref (theirs) and 3-way-merges onto your working tree (ours) via
+  `git merge-file`. Non-overlapping changes merge cleanly; overlaps get Git-style
+  conflict markers (exit 4). `--target REF` picks the version to update to; the
+  lock advances on success.
+
+### Fixed
+
+- **Corrected the documented command name.** The command is `fluid
+  custom-scaffold`, not `fluid generate custom-scaffold` (which never existed);
+  all docs updated, with a guard test so it can't drift back.
+- **`--pin` now warns on non-git sources** instead of implying a false `local`
+  pin — only git sources carry a reproducible commit.
+
+### Internal
+
+- **Cross-package integration tests for all three host↔plugin seams** —
+  `fluid_build.commands` (the dispatch that broke in 0.1.2), `extension_schemas`,
+  and `extension_validators` — drive the real FLUID host against this package's
+  entry points in a dedicated `cli-integration` CI job, so a contract drift fails
+  CI instead of on a user's machine.
+
 ## [0.2.0] — 2026-06-27
 
 ### Fixed
