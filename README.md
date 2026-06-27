@@ -21,7 +21,7 @@ extensions:
 ```
 
 ```bash
-fluid generate custom-scaffold
+fluid custom-scaffold
 # ✓ 3 files written, 0 failed
 #   README.md
 #   .gitlab-ci.yml
@@ -106,7 +106,7 @@ Subclass `fluid_sdk.CustomScaffold` directly. Full programmatic control.
 ## CLI surface
 
 ```bash
-fluid generate custom-scaffold [OPTIONS]
+fluid custom-scaffold [OPTIONS]
 
   -c, --contract PATH    Path to contract.fluid.yaml (default: ./contract.fluid.yaml)
   -o, --output PATH      Output root (default: cwd)

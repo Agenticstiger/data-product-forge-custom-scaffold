@@ -45,7 +45,7 @@ extensions:
 ## Step 3 — Generate
 
 ```bash
-fluid generate custom-scaffold
+fluid custom-scaffold
 ```
 
 ```
@@ -71,7 +71,7 @@ The engine cached it here:
 Re-runs reuse the cache. To force a fresh clone, delete that directory or set:
 
 ```bash
-FLUID_CUSTOM_SCAFFOLD_NOCACHE=1 fluid generate custom-scaffold
+FLUID_CUSTOM_SCAFFOLD_NOCACHE=1 fluid custom-scaffold
 ```
 
 ## Private git repos
@@ -89,7 +89,7 @@ source:
 
 ```bash
 export GITHUB_TOKEN=ghp_xxx
-fluid generate custom-scaffold
+fluid custom-scaffold
 ```
 
 The token is injected into the clone URL at fetch time, never written to disk, never logged.

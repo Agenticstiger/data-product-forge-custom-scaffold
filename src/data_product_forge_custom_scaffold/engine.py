@@ -102,6 +102,17 @@ class Engine:
                 continue
             source = lib["source"]
             if pin:
+                if source.get("kind") != "git":
+                    # Only git sources carry a reproducible commit. Path /
+                    # entry-point sources resolve to whatever is on disk / installed
+                    # now, so --pin cannot freeze them — say so rather than imply a
+                    # false guarantee.
+                    LOG.warning(
+                        "library %r is a %r source — --pin cannot reproducibly lock it "
+                        "(only git sources pin to a commit)",
+                        lib_id,
+                        source.get("kind", "?"),
+                    )
                 source = pin_source(source, locked_libs.get(lib_id) or {})
             # Thread contract_dir so relative `path:` sources anchor to
             # the contract's directory, not the invoking process cwd.

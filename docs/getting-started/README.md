@@ -77,7 +77,7 @@ YAML
 ## Step 4 — Generate
 
 ```bash
-fluid generate custom-scaffold
+fluid custom-scaffold
 ```
 
 ```
@@ -132,7 +132,7 @@ deploy:prod:
 ## Step 6 — Determinism check
 
 ```bash
-fluid generate custom-scaffold --dry-run
+fluid custom-scaffold --dry-run
 ```
 
 You'll see the same 3 file paths listed — no files touched. The action list is byte-for-byte identical to what `apply()` would produce.
@@ -142,7 +142,7 @@ You'll see the same 3 file paths listed — no files touched. The action list is
 ```
 contract.fluid.yaml
         │
-        ▼  fluid generate custom-scaffold
+        ▼  fluid custom-scaffold
 FLUID CLI: loads + validates, dispatches to engine
         │
         ▼

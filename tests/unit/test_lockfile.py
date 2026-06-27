@@ -141,3 +141,15 @@ def test_engine_dry_run_writes_no_lock(tmp_path: Path):
     result = Engine(output_root=out).run(_CONTRACT, dry_run=True)
     assert result.lockfile is None
     assert not (out / LOCKFILE_NAME).exists()
+
+
+def test_pin_warns_for_non_git_source(tmp_path: Path, caplog):
+    # --pin on a path/entry-point source can't reproducibly lock it; the engine
+    # must say so rather than imply a false 'local' pin.
+    out = tmp_path / "out"
+    Engine(output_root=out).run(_CONTRACT)  # generate (path source) → writes lock
+    with caplog.at_level("WARNING"):
+        Engine(output_root=out).run(_CONTRACT, pin=True)
+    assert any(
+        "cannot reproducibly lock" in r.getMessage() for r in caplog.records
+    ), "pinning a non-git source must warn"
