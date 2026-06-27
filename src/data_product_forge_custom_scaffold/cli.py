@@ -81,6 +81,15 @@ def make_register(
             help="Restrict to specific library ids (repeatable).",
         )
         parser.add_argument(
+            "--pin",
+            action="store_true",
+            help=(
+                "Reproducible re-run: resolve git sources to the commit recorded in "
+                "fluid-scaffold.lock instead of following the contract ref. Without it, "
+                "the ref is followed and the lock is refreshed."
+            ),
+        )
+        parser.add_argument(
             "--json",
             action="store_true",
             help="Emit machine-readable JSON result instead of a human summary.",
@@ -131,6 +140,7 @@ def run(args: argparse.Namespace, *, dialect: ScaffoldDialect = DEFAULT_DIALECT)
             dry_run=args.dry_run,
             pattern_filter=args.pattern,
             library_filter=args.lib,
+            pin=getattr(args, "pin", False),
         )
     except EngineError as e:
         print(f"error: {e}", file=sys.stderr)

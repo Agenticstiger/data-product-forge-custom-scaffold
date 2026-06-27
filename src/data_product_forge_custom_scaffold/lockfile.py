@@ -124,3 +124,19 @@ def read_lock(output_root: Path) -> Dict[str, Any]:
         return {}
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     return data if isinstance(data, dict) else {}
+
+
+def pin_source(source: Mapping[str, Any], locked: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return *source* with its git ref overridden by the locked commit.
+
+    This is the reproducibility lever: a re-run with pinning resolves a git
+    library to the exact commit recorded in the lock instead of following the
+    floating ``ref`` (which may have moved). Only git sources with a recorded
+    commit are pinned; path / entry-point sources, or a missing commit, are
+    returned unchanged.
+    """
+    out = dict(source)
+    commit = (locked or {}).get("commit")
+    if out.get("kind") == "git" and commit:
+        out["ref"] = str(commit)
+    return out
