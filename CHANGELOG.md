@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-27
+
+### Fixed
+
+- **`fluid custom-scaffold` no longer crashes on first invocation.** The FLUID
+  CLI dispatches a command as `func(args, logger)` (two positionals), but the
+  command was registered with a one-arg handler — so the primary CLI entry point
+  raised `TypeError: takes 1 positional argument but 2 were given` for every user
+  who installed the engine alongside `data-product-forge`. The handler now
+  accepts (and ignores) extra positionals. Found by end-to-end testing through
+  the real `fluid` binary.
+
+### Added
+
+- **Reproducibility: `fluid-scaffold.lock` + `--pin`** (copier-style answers
+  model). A successful generation now writes a deterministic, credential-free
+  `fluid-scaffold.lock` at the output root recording, per resolved library, the
+  exact resolved commit (alongside the contract ref) plus the patterns and
+  variables used. Re-running with `--pin` resolves git sources to the **locked
+  commit** instead of following a (possibly moved) ref — a byte-reproducible
+  re-run (`npm ci` / `poetry --frozen` semantics; opt-in, default behaviour
+  unchanged). The lock travels with the generated project; commit it.
+
 ## [0.1.2] — 2026-06-27
 
 ### Fixed
