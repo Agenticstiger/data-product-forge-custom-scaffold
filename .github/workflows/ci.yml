@@ -16,6 +16,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Nightly: re-run the suite (incl. the cli-integration cross-package job, which
+  # installs the LATEST published data-product-forge) so a host dispatch / entry-
+  # point drift is caught on the HOST's release cadence, not only when this engine
+  # next commits.
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
