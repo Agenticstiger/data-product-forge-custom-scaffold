@@ -100,20 +100,23 @@ class PatternEntry:
     * ``required_contract_fields`` — **enforced**: a fail-fast presence check on
       the contract before rendering (see ``TemplatedCustomScaffold``).
     * ``templates`` — **enforced**: the file-emission directives.
-    * ``variables_schema`` (the ``variables`` block) — **reserved**: parsed, but
-      NOT yet validated against the user-supplied variables. Declaring it has no
-      effect today; per-variable validation is a planned feature.
-    * ``supported_product_types`` / ``supported_ci_systems`` — **advisory**
-      declarative metadata for catalogs and tooling; NOT enforced by the engine
-      (it receives no target product-type / CI-system to gate against).
+    * ``variables_schema`` (the ``variables`` block) — **enforced**: the
+      user-supplied variables are validated against this JSON Schema at plan
+      time (no schema declared → no-op).
+    * ``supported_product_types`` — **enforced**: if declared, the pattern is
+      rejected for a contract whose product type isn't listed (no list → no-op;
+      a contract with no product type isn't gated).
+    * ``supported_ci_systems`` — **advisory** declarative metadata for catalogs
+      and tooling; NOT enforced (the engine has no target CI-system to gate on).
     """
 
     name: str
     description: str = ""
-    # Advisory metadata — not enforced by the engine (see class docstring).
+    # Enforced: gate the pattern against the contract's product type (if declared).
     supported_product_types: List[str] = field(default_factory=list)
+    # Advisory metadata — not enforced by the engine (no target CI-system).
     supported_ci_systems: List[str] = field(default_factory=list)
-    # Reserved — parsed but not yet validated against user variables.
+    # Enforced: the user-supplied variables are validated against this JSON Schema.
     variables_schema: Mapping[str, Any] = field(default_factory=dict)
     required_contract_fields: List[str] = field(default_factory=list)
     templates: List[TemplateEntry] = field(default_factory=list)

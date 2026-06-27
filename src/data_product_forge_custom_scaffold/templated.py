@@ -30,12 +30,17 @@ from fluid_sdk import (
     write_file_action,
 )
 
-from .context import build_render_context
+from .context import ContractHelper, build_render_context
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
-from .manifest import BundleManifest, PatternEntry
+from .manifest import BundleManifest, ManifestError, PatternEntry
 from .renderer import Renderer
 from .version import ENGINE_VERSION
+
+try:
+    from jsonschema import Draft7Validator
+except ImportError:  # jsonschema is a hard runtime dep; this branch is defensive only
+    Draft7Validator = None  # type: ignore[assignment]
 
 
 class TemplatedCustomScaffold(CustomScaffold):
@@ -99,7 +104,10 @@ class TemplatedCustomScaffold(CustomScaffold):
     # ── plan: validate, build context, render, build actions ────────
 
     def plan(self, contract: Mapping[str, Any]) -> List[Dict[str, Any]]:
-        # 1. Validate required contract fields up front — fail fast.
+        # 1. Gate + validate up front, fail fast (before any rendering). Stable
+        #    precedence: applicability → variable overrides → required fields.
+        self._check_supported_product_types(contract)
+        self._validate_variables()
         self._check_required_fields(contract, self._pattern)
 
         # 2. Build the render context. Surface the bundle's own identity
@@ -143,6 +151,53 @@ class TemplatedCustomScaffold(CustomScaffold):
         return actions
 
     # ── helpers ─────────────────────────────────────────────────────
+
+    def _check_supported_product_types(self, contract: Mapping[str, Any]) -> None:
+        """Reject the pattern if it declares ``supportedProductTypes`` and the
+        contract's product type isn't among them.
+
+        No declaration → no-op (the field is optional). A contract that declares
+        no product type is not gated (nothing to check against).
+        """
+        supported = self._pattern.supported_product_types
+        if not supported:
+            return
+        product_type = str(ContractHelper(contract).product_type or "")
+        if product_type and product_type not in supported:
+            raise PluginError(
+                f"Pattern {self._pattern.name!r} supports product types "
+                f"{sorted(supported)}, but the contract's product type is "
+                f"{product_type!r}."
+            )
+
+    def _validate_variables(self) -> None:
+        """Validate the user-supplied ``variables`` against the pattern's
+        ``variables`` JSON Schema.
+
+        No schema → no-op (preserves every existing bundle). A malformed bundle
+        schema is the bundle author's error (``ManifestError``); an override that
+        violates a valid schema is the contract author's error (``PluginError``).
+        """
+        schema = self._pattern.variables_schema
+        if not schema or Draft7Validator is None:
+            return
+        try:
+            Draft7Validator.check_schema(schema)
+        except Exception as e:  # noqa: BLE001 - surface a bad bundle schema clearly
+            raise ManifestError(
+                f"Pattern {self._pattern.name!r} has an invalid `variables` JSON "
+                f"Schema: {type(e).__name__}: {e}"
+            ) from e
+        errors = sorted(
+            Draft7Validator(schema).iter_errors(self.variables),
+            key=lambda e: list(e.path),
+        )
+        if errors:
+            details = "; ".join(
+                f"variables.{'.'.join(str(p) for p in e.path) or '(root)'}: {e.message}"
+                for e in errors
+            )
+            raise PluginError(f"Pattern {self._pattern.name!r}: invalid variables — {details}")
 
     @staticmethod
     def _check_required_fields(
