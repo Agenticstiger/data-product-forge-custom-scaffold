@@ -9,7 +9,7 @@ The fastest way to share a bundle within an organisation is **just push it to a 
 Any git repo with a `fluid-scaffold.yaml` at the top level (or under a subdirectory) qualifies. For this walkthrough, we'll use the engine's reference bundle:
 
 ```
-https://github.com/fluid-build/data-product-forge-custom-scaffold
+https://github.com/Agenticstiger/data-product-forge-custom-scaffold
   └─ tests/fixtures/reference_bundle/
        ├── fluid-scaffold.yaml
        ├── templates/...
@@ -35,7 +35,7 @@ extensions:
       - id: ref
         source:
           kind: git
-          url: "https://github.com/fluid-build/data-product-forge-custom-scaffold"
+          url: "https://github.com/Agenticstiger/data-product-forge-custom-scaffold"
           ref: "main"
           subdir: "tests/fixtures/reference_bundle"
     patterns:

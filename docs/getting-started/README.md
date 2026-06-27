@@ -1,6 +1,6 @@
 # Getting Started
 
-**Time:** 5 minutes | **Difficulty:** Beginner | **Prerequisites:** Python 3.9+, `pip`
+**Time:** 5 minutes | **Difficulty:** Beginner | **Prerequisites:** Python 3.10+, `pip`
 
 You're going to install the engine, point it at a tiny example bundle, and watch it produce a working project from a fluid contract.
 
@@ -23,7 +23,7 @@ fluid generate --help
 Copy the reference fixture bundle that ships with the engine:
 
 ```bash
-git clone https://github.com/fluid-build/data-product-forge-custom-scaffold.git
+git clone https://github.com/Agenticstiger/data-product-forge-custom-scaffold.git
 cp -r data-product-forge-custom-scaffold/tests/fixtures/reference_bundle ./my-bundle
 ```
 
