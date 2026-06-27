@@ -30,16 +30,27 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, List, Mapping, Optional
 
 from ..manifest import MANIFEST_FILENAME
 from .base import ResolutionError, ResolvedBundle, Resolver, cache_root
 
 # Allowed URL schemes — any other scheme is rejected outright.
 _ALLOWED_SCHEMES = ("https://", "ssh://", "git@", "git+https://", "git+ssh://")
+
+# A full-length commit object name: 40 hex (SHA-1) or 64 hex (SHA-256). ``git
+# clone --branch`` rejects raw commit ids ("Remote branch <sha> not found"), so
+# a ref of this shape is fetched + checked out instead of branch-cloned.
+_FULL_SHA_RE = re.compile(r"\A(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+
+
+def _looks_like_full_sha(ref: str) -> bool:
+    """True for a full-length commit id (the only reproducible git pin)."""
+    return bool(_FULL_SHA_RE.match(ref))
 
 
 class GitResolver(Resolver):
@@ -137,22 +148,76 @@ class GitResolver(Resolver):
                 )
             clone_url = self._inject_token(url, token)
 
-        # Shallow clone to keep cache small. Allow no-checkout for ref/sha switches.
-        try:
-            subprocess.run(
-                ["git", "clone", "--depth", "1", "--branch", ref, clone_url, str(cache_dir)],
-                check=True,
-                capture_output=True,
-                text=True,
+        if _looks_like_full_sha(ref):
+            self._fetch_sha_into_cache(clone_url, ref, cache_dir, url)
+        else:
+            self._clone_ref_into_cache(clone_url, ref, cache_dir, url)
+
+    def _clone_ref_into_cache(self, clone_url: str, ref: str, cache_dir: Path, url: str) -> None:
+        # Branch or tag: a shallow ``--branch`` clone is the cheapest path.
+        self._git(
+            ["clone", "--depth", "1", "--branch", ref, clone_url, str(cache_dir)],
+            clone_url=clone_url,
+            url=url,
+            what=f"clone {_sanitise_url(url)}@{ref}",
+        )
+
+    def _fetch_sha_into_cache(self, clone_url: str, ref: str, cache_dir: Path, url: str) -> None:
+        # ``git clone --branch`` rejects raw commit ids, so initialise an empty
+        # repo and fetch the commit directly (the robherley/shallow-fetch-sha
+        # idiom). The URL is passed INLINE to ``git fetch`` — never via
+        # ``git remote add`` — so the token is not persisted to .git/config.
+        self._git(["init", "-q", str(cache_dir)], clone_url=clone_url, url=url, what="git init")
+
+        # Fast path: shallow-fetch just the pinned commit. Needs the server to
+        # allow fetching a reachable sha (uploadpack.allowReachableSHA1InWant —
+        # GitHub / GitLab / Bitbucket support it).
+        if self._git_ok(["-C", str(cache_dir), "fetch", "--depth", "1", clone_url, ref]):
+            target = "FETCH_HEAD"
+        else:
+            # Fallback for servers that disallow fetch-by-sha (mirrors
+            # cookiecutter's vcs.clone + copier's --vcs-ref: a full fetch, then
+            # check the commit out locally). Still inline-URL, so no token on disk.
+            self._git(
+                ["-C", str(cache_dir), "fetch", clone_url, "+refs/heads/*:refs/remotes/origin/*"],
+                clone_url=clone_url,
+                url=url,
+                what=f"fetch {_sanitise_url(url)}@{ref}",
             )
+            target = ref
+
+        self._git(
+            ["-C", str(cache_dir), "checkout", "-q", target],
+            clone_url=clone_url,
+            url=url,
+            what=f"checkout {_sanitise_url(url)}@{ref}",
+        )
+
+    @staticmethod
+    def _git(args: List[str], *, clone_url: str, url: str, what: str) -> None:
+        """Run a git subcommand, redacting any embedded token from errors."""
+        try:
+            subprocess.run(["git", *args], check=True, capture_output=True, text=True)
         except FileNotFoundError as e:
             raise ResolutionError("git resolver requires the 'git' binary on PATH") from e
         except subprocess.CalledProcessError as e:
             # Hide the token from any error output before re-raising.
             stderr = (e.stderr or "").replace(clone_url, _sanitise_url(url))
-            raise ResolutionError(
-                f"git clone failed for {_sanitise_url(url)}@{ref}: {stderr.strip()}"
-            ) from None
+            raise ResolutionError(f"git {what} failed: {stderr.strip()}") from None
+
+    @staticmethod
+    def _git_ok(args: List[str]) -> bool:
+        """Best-effort probe: True on success, False on a non-zero git exit.
+
+        Used only to decide whether the shallow fetch-by-sha fast path worked
+        before falling back to a full fetch; a missing ``git`` binary surfaces
+        as a real error from the preceding :meth:`_git` ``init`` call.
+        """
+        try:
+            subprocess.run(["git", *args], check=True, capture_output=True, text=True)
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return False
 
     @staticmethod
     def _head_sha(repo_dir: Path) -> str:
