@@ -32,7 +32,7 @@ from fluid_sdk import CustomScaffold, ExecutionResult, PluginError
 
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
-from .lockfile import build_lock, write_lock
+from .lockfile import build_lock, pin_source, read_lock, write_lock
 from .resolvers import ResolvedBundle, resolve_bundle
 from .templated import TemplatedCustomScaffold
 from .version import ENGINE_VERSION
@@ -78,21 +78,33 @@ class Engine:
         dry_run: bool = False,
         pattern_filter: Optional[List[str]] = None,
         library_filter: Optional[List[str]] = None,
+        pin: bool = False,
     ) -> EngineRunResult:
-        """Generate scaffolds from *contract*."""
+        """Generate scaffolds from *contract*.
+
+        When ``pin`` is set, each git library is resolved to the exact commit
+        recorded in an existing ``fluid-scaffold.lock`` at the output root rather
+        than following the (possibly moved) contract ``ref`` — a reproducible
+        re-run. Without ``pin`` (the default) the contract ref is followed and
+        the lock is refreshed to whatever it now resolves to.
+        """
         block = self._extract_block(contract)
         if block is None:
             return EngineRunResult()
 
-        # 1. Resolve libraries.
+        # 1. Resolve libraries. With pin, re-pin git sources to the locked commit.
+        locked_libs = read_lock(self.output_root).get("libraries", {}) if pin else {}
         resolved: Dict[str, ResolvedBundle] = {}
         for lib in block.get("libraries", []):
             lib_id = lib["id"]
             if library_filter and lib_id not in library_filter:
                 continue
+            source = lib["source"]
+            if pin:
+                source = pin_source(source, locked_libs.get(lib_id) or {})
             # Thread contract_dir so relative `path:` sources anchor to
             # the contract's directory, not the invoking process cwd.
-            resolved[lib_id] = resolve_bundle(lib["source"], contract_dir=self.contract_dir)
+            resolved[lib_id] = resolve_bundle(source, contract_dir=self.contract_dir)
 
         # 2. Plan + apply each pattern.
         all_actions: List[Dict[str, Any]] = []
