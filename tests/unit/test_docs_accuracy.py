@@ -119,6 +119,7 @@ def test_library_api_is_documented_and_discoverable():
         "PlanError",
         "UnsafePathError",
         "ApplyError",
+        "OutputError",
     ):
         assert name in text, f"the reference must cover {name}"
         assert hasattr(pkg, name), f"{name} is documented but not exported"

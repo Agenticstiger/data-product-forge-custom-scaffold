@@ -348,7 +348,9 @@ def _plan_confined(
 ) -> List[Dict[str, Any]]:
     """Run ``plan()`` in isolation, then confine every planned path before apply."""
     try:
-        actions = scaffold.plan(contract)
+        # One list for confinement, the recorded plan and apply(): a one-shot iterable
+        # (a generator) would otherwise be consumed by the first of them.
+        actions = list(scaffold.plan(contract))
         # Confine BEFORE apply() — for every bundle kind, and on a dry run too, so a
         # plan that escapes the output directory is refused rather than listed as
         # "would write".

@@ -41,6 +41,7 @@ from .errors import (
     BundleError,
     ContractError,
     EngineError,
+    OutputError,
     PlanError,
     UnsafePathError,
 )
@@ -71,6 +72,7 @@ __all__ = [
     "PlanError",
     "UnsafePathError",
     "ApplyError",
+    "OutputError",
     # Core engine
     "Engine",
     "BundleManifest",

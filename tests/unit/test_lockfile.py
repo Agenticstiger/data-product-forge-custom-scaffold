@@ -153,3 +153,20 @@ def test_pin_warns_for_non_git_source(tmp_path: Path, caplog):
     assert any(
         "cannot reproducibly lock" in r.getMessage() for r in caplog.records
     ), "pinning a non-git source must warn"
+
+
+def test_write_lock_pins_lf_newlines_on_every_platform(tmp_path: Path, monkeypatch):
+    # Path.write_text translates "\n" to the platform newline (CRLF on Windows)
+    # unless told not to. The lock must be the same bytes everywhere, or a dry run's
+    # digest of its text would not match the file a real run writes.
+    seen = {}
+    real_write_text = Path.write_text
+
+    def spy(self, data, *args, **kwargs):
+        seen.update(kwargs)
+        return real_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", spy)
+    write_lock(tmp_path, {"lockfileVersion": 1})
+
+    assert seen.get("newline") == "\n"

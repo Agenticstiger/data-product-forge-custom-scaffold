@@ -113,7 +113,9 @@ def write_lock(output_root: Path, lock: Mapping[str, Any]) -> Path:
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     path = output_root / LOCKFILE_NAME
-    path.write_text(dump_lock(lock), encoding="utf-8")
+    # newline="\n": write_text would turn "\n" into CRLF on Windows, and the lock's
+    # bytes (and so its digest) must not depend on the platform.
+    path.write_text(dump_lock(lock), encoding="utf-8", newline="\n")
     return path
 
 

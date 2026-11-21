@@ -12,11 +12,17 @@ needs one ``except EngineError`` and can still branch on the subclass:
 * :class:`RenderError` — a template failed to render, or a path escapes the output
   root. :class:`UnsafePathError` is the path-escape case.
 * :class:`ApplyError` — ``apply()`` failed.
+* :class:`OutputError` — the run finished, but a file it planned cannot be described
+  (``generate()`` only; ``fluid custom-scaffold`` does not need the description).
 
-Messages for a failure inside third-party plugin code carry the exception *type*
-only, because an arbitrary exception's text can hold a credential. Engine-authored
-errors and the SDK's user-actionable ``PluginError`` keep their message. The
-original exception is always chained as ``__cause__``.
+A failure while a pattern's ``plan()`` or ``apply()`` runs carries the exception
+*type* only, because an arbitrary exception's text can hold a credential — and a
+template can interpolate contract values into one. That includes a failed template
+render: it surfaces as :class:`PlanError` with the ``RenderError`` chained as
+``__cause__``. The exceptions are the SDK's user-actionable ``PluginError`` and
+:class:`UnsafePathError`, which name the offending path. Errors raised outside
+``plan()``/``apply()`` (resolving a bundle, parsing its manifest) are engine-authored
+and keep their message. The original exception is always chained as ``__cause__``.
 
 The shape (one base class, a distinct subclass for an unsafe destination path)
 follows copier's ``CopierError`` / ``ForbiddenPathError`` and CPython's
@@ -63,6 +69,21 @@ class ApplyError(EngineError):
     When the failure was reported by ``apply()`` (some actions failed) rather than
     raised, :attr:`run` holds the engine run so a caller can still inspect the
     per-action detail. It is ``None`` when ``apply()`` raised.
+    """
+
+    def __init__(self, message: str, *, run: Optional["EngineRunResult"] = None) -> None:
+        super().__init__(message)
+        self.run = run
+
+
+class OutputError(EngineError):
+    """The run finished, but a file it planned cannot be described.
+
+    Raised by ``generate()`` after ``apply()`` reported no failure (or on a dry run):
+    the planned file is missing from the output directory (a plugin whose own
+    ``apply()`` keeps its output elsewhere), or the planned action has no usable path
+    or content. :attr:`run` is the engine run, so a caller that does not need the file
+    list can still use it — ``fluid custom-scaffold`` does exactly that.
     """
 
     def __init__(self, message: str, *, run: Optional["EngineRunResult"] = None) -> None:

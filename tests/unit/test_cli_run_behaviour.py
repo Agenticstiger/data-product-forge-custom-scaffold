@@ -20,6 +20,7 @@ from fluid_sdk import ExecutionResult, write_file_action
 
 from data_product_forge_custom_scaffold import cli
 from data_product_forge_custom_scaffold.engine import Engine
+from tests.helpers import SdkScaffold, use_scaffold
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 SECRET = "sk-live-supersecret-do-not-leak"
@@ -279,3 +280,55 @@ def test_failed_apply_action_json_carries_the_apply_block_and_exits_3(
     assert payload["apply"]["results"] == [
         {"op": "write_file", "resource_id": "a.txt", "status": "failed"}
     ]
+
+
+# ── plans the SDK accepts but the file list cannot describe ───────────────────
+#
+# generate() builds a (path, sha256, size) list the command never prints. These
+# plugin shapes are valid for the SDK (it lets a plugin override apply() entirely and
+# writes a content-less action as an empty file), so the command must still behave as
+# it always did: print what the engine did and exit 0.
+
+
+def _reported_ok(actions) -> ExecutionResult:
+    return ExecutionResult(
+        plugin="p",
+        role="custom_scaffold",
+        applied=1,
+        failed=0,
+        duration_sec=0.0,
+        timestamp="T",
+    )
+
+
+def test_a_plugin_whose_apply_writes_elsewhere_still_exits_0(tmp_path, capsys, monkeypatch):
+    contract, out = _project(tmp_path)
+    _fake_scaffold(monkeypatch, plan=_ONE_FILE, apply=_reported_ok)
+    rc, stdout, stderr = _cli(capsys, "-c", str(contract), "-o", str(out))
+
+    assert (rc, stderr) == (0, "")
+    assert re.fullmatch(r"✓ 1 files written, 0 failed \(.+s\)", stdout.splitlines()[3])
+    assert not (out / "a.txt").exists()  # the plugin wrote nothing there
+
+
+def test_a_planned_action_without_content_still_exits_0(tmp_path, capsys, monkeypatch):
+    contract, out = _project(tmp_path)
+    plan = [{"op": "write_file", "resource_id": "e", "params": {"path": "empty.txt"}}]
+    use_scaffold(monkeypatch, SdkScaffold(plan, output_root=out))
+    rc, stdout, stderr = _cli(capsys, "-c", str(contract), "-o", str(out))
+
+    assert (rc, stderr) == (0, "")
+    assert re.fullmatch(r"✓ 1 files written, 0 failed \(.+s\)", stdout.splitlines()[3])
+    assert (out / "empty.txt").read_bytes() == b""
+
+
+def test_a_dry_run_of_a_plan_with_an_unusable_path_still_lists_it_and_exits_0(
+    tmp_path, capsys, monkeypatch
+):
+    contract, out = _project(tmp_path)
+    plan = [{"op": "write_file", "params": {"path": "", "content_b64": ""}}]
+    _fake_scaffold(monkeypatch, plan=plan, apply=lambda actions: None)
+    rc, stdout, stderr = _cli(capsys, "-c", str(contract), "-o", str(out), "--dry-run")
+
+    assert (rc, stderr) == (0, "")
+    assert stdout.splitlines()[3] == "Planned 1 file(s) (dry run — nothing written):"

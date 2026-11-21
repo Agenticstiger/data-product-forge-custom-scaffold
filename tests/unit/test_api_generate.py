@@ -25,6 +25,7 @@ from data_product_forge_custom_scaffold import (
     EngineError,
     GeneratedFile,
     GenerationResult,
+    OutputError,
     PlanError,
     UnsafePathError,
     generate,
@@ -346,13 +347,99 @@ def test_failed_files_raise_apply_error_that_lists_paths_not_error_text(
     assert ei.value.run.apply_result.results[0]["error"] == SECRET
 
 
-def test_a_planned_file_missing_after_apply_is_an_apply_error(tmp_path: Path, monkeypatch) -> None:
+def test_a_planned_file_missing_after_apply_is_an_output_error(tmp_path: Path, monkeypatch) -> None:
+    # A plugin may override apply() and keep its output elsewhere (in memory, an
+    # archive). The run is fine, but there is no file to describe: say so, typed, and
+    # keep the engine run reachable.
     ok = ExecutionResult(plugin="p", role="custom_scaffold", applied=1, failed=0)
     use_scaffold(monkeypatch, ScriptedScaffold(_ONE_FILE, apply=lambda actions: ok))
     bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
-    with pytest.raises(ApplyError, match="'a.txt' was planned but could not be read back"):
+    with pytest.raises(OutputError, match="'a.txt' was planned but could not be read back") as ei:
         generate(path_contract(bundle, ["p"]), tmp_path / "out")
+
+    assert isinstance(ei.value, EngineError) and not isinstance(ei.value, ApplyError)
+    assert ei.value.run is not None and ei.value.run.apply_result.applied == 1
+
+
+def test_an_action_without_content_is_an_empty_file_as_the_sdk_writes_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    out = tmp_path / "out"
+    plan = [{"op": "write_file", "resource_id": "e", "params": {"path": "empty.txt"}}]
+    use_scaffold(monkeypatch, SdkScaffold(plan, output_root=out))
+    contract = path_contract(write_bundle(tmp_path, {"p": {"x.txt": "x\n"}}), ["p"])
+
+    real = generate(contract, out)
+    dry = generate(contract, tmp_path / "dry", dry_run=True)
+
+    assert (out / "empty.txt").read_bytes() == b""
+    assert _rows(real)["empty.txt"] == (hashlib.sha256(b"").hexdigest(), 0)
+    assert dry.files == real.files
+
+
+@pytest.mark.parametrize("bad_path", ["", None, 7])
+def test_an_unusable_planned_path_fails_the_real_run_and_is_an_output_error_on_a_dry_run(
+    tmp_path: Path, monkeypatch, bad_path: object
+) -> None:
+    out = tmp_path / "out"
+    plan = [
+        {"op": "write_file", "resource_id": "x", "params": {"path": bad_path, "content_b64": ""}}
+    ]
+    use_scaffold(monkeypatch, SdkScaffold(plan, output_root=out))
+    contract = path_contract(write_bundle(tmp_path, {"p": {"x.txt": "x\n"}}), ["p"])
+
+    with pytest.raises(OutputError, match="no usable path or content") as dry:
+        generate(contract, tmp_path / "dry", dry_run=True)
+    assert dry.value.run is not None
+
+    with pytest.raises(ApplyError, match="apply failed for 1 of 1 file") as real:
+        generate(contract, out)  # the SDK's apply() reports the action as failed
+    assert real.value.run is not None
+
+
+@pytest.mark.parametrize(
+    "params, message",
+    [
+        ({"path": "x.txt", "content_b64": 5}, "no usable path or content"),
+        ({"path": "x.txt", "content_b64": "abc"}, "not base64"),
+    ],
+)
+def test_a_dry_run_refuses_content_the_sdk_would_fail_to_write(
+    tmp_path: Path, monkeypatch, params: dict, message: str
+) -> None:
+    plan = [{"op": "write_file", "resource_id": "x", "params": params}]
+    use_scaffold(monkeypatch, SdkScaffold(plan, output_root=tmp_path / "out"))
+    contract = path_contract(write_bundle(tmp_path, {"p": {"x.txt": "x\n"}}), ["p"])
+
+    with pytest.raises(OutputError, match=message):
+        generate(contract, tmp_path / "dry", dry_run=True)
+
+
+def test_a_one_shot_plan_is_materialised_once_for_confinement_and_apply(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class _GeneratorPlan(SdkScaffold):
+        def plan(self, contract):
+            return (action for action in self._actions)
+
+    out = tmp_path / "out"
+    use_scaffold(monkeypatch, _GeneratorPlan(_ONE_FILE, output_root=out))
+    contract = path_contract(write_bundle(tmp_path, {"p": {"x.txt": "x\n"}}), ["p"])
+
+    result = generate(contract, out)
+
+    assert (out / "a.txt").read_bytes() == b"a"
+    assert [f.path for f in result.files] == ["a.txt", LOCKFILE_NAME]
+    assert len(result.run.actions) == 1
+
+
+@pytest.mark.parametrize("name", ["pattern_filter", "library_filter"])
+def test_a_bare_string_filter_is_refused(tmp_path: Path, name: str) -> None:
+    # A str is a Sequence[str]; "lib:p" would silently become five one-letter filters.
+    with pytest.raises(TypeError, match=f"{name} must be a sequence of strings"):
+        generate({"id": "x"}, tmp_path / "out", **{name: "lib:p"})  # type: ignore[arg-type]
+    assert not (tmp_path / "out").exists()
 
 
 def test_contract_must_be_a_mapping(tmp_path: Path) -> None:
@@ -467,5 +554,6 @@ def test_public_names_are_exported_from_the_package() -> None:
         "PlanError",
         "UnsafePathError",
         "ApplyError",
+        "OutputError",
     ):
         assert name in pkg.__all__ and hasattr(pkg, name)

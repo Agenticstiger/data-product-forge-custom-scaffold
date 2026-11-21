@@ -30,7 +30,7 @@ from .api import generate
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
 from .engine import Engine
-from .errors import ApplyError, EngineError
+from .errors import ApplyError, EngineError, OutputError
 from .update import UpdateError
 from .validation import make_schema_provider
 
@@ -170,8 +170,12 @@ def run(args: argparse.Namespace, *, dialect: ScaffoldDialect = DEFAULT_DIALECT)
             pin=getattr(args, "pin", False),
             dialect=dialect,
         ).run
+    except OutputError as e:
+        # The engine ran fine; only generate()'s (path, sha256, size) list could not be
+        # built. The command prints what the engine did and has never needed that list.
+        run = e.run
     except ApplyError as e:
-        if e.run is None:  # apply() raised, or a planned file never appeared
+        if e.run is None:  # apply() raised
             print(f"error: {e}", file=sys.stderr)
             return 2
         # apply() reported failed files: still show the summary, then exit 3.
