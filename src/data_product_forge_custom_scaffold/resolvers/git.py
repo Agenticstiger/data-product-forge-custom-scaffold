@@ -19,6 +19,13 @@ the URL it was given), and a commit pin passes the URL inline to ``git fetch``.
 git never prompts on the terminal for a credential (``GIT_TERMINAL_PROMPT=0``
 unless the caller sets it), so a library call cannot hang waiting for input.
 
+ssh never waits for an answer either. An ssh URL runs with
+``GIT_SSH_COMMAND=ssh -o BatchMode=yes``, so a key passphrase or an unknown host key is
+an error, not a hang. The default is left out when the caller has chosen an ssh command
+(``GIT_SSH_COMMAND`` or ``GIT_SSH`` in the environment, or ``core.sshCommand`` in git
+config): git gives ``GIT_SSH_COMMAND`` priority over the other two, so setting it
+blindly would switch off a deploy key configured through either.
+
 Cache layout::
 
     ~/.cache/fluid/custom-scaffold/git/<urlhash>/<ref>/
@@ -52,15 +59,65 @@ _ALLOWED_SCHEMES = ("https://", "ssh://", "git@", "git+https://", "git+ssh://")
 _FULL_SHA_RE = re.compile(r"\A(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
 
-def _git_env() -> Dict[str, str]:
-    """The environment for git subprocesses: no terminal credential prompt.
+# ssh must not wait for a person: no passphrase prompt, no "trust this host key?" question.
+_SSH_BATCH_MODE = "ssh -o BatchMode=yes"
+_SSH_PREFIXES = ("ssh://", "git+ssh://", "git@")
 
-    ``GIT_TERMINAL_PROMPT=0`` is a default, not an override: a caller that has set it
-    keeps its value.
+# What ssh prints when BatchMode turned a prompt into a failure.
+_PROMPT_FAILURES = ("Host key verification failed", "Permission denied")
+_BATCH_MODE_HINT = (
+    "ssh ran without prompts (-o BatchMode=yes). Add the host to known_hosts or load the "
+    "key into ssh-agent, or set GIT_SSH_COMMAND (for example to 'ssh') to choose how ssh runs."
+)
+
+
+def _git_env(url: str = "") -> Dict[str, str]:
+    """The environment for git subprocesses: nothing may wait for a person to answer.
+
+    Both settings are defaults, not overrides.
+
+    * ``GIT_TERMINAL_PROMPT=0`` stops git's own credential prompt. A caller that has set
+      it keeps its value.
+    * For an ssh *url*, ``GIT_SSH_COMMAND=ssh -o BatchMode=yes`` stops ssh asking for a
+      passphrase or a host-key confirmation. It is left out when the caller has chosen
+      an ssh command (see :func:`_ssh_command_chosen`).
     """
     env = dict(os.environ)
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    if url.startswith(_SSH_PREFIXES) and not _ssh_command_chosen(env):
+        env["GIT_SSH_COMMAND"] = _SSH_BATCH_MODE
     return env
+
+
+def _ssh_command_chosen(env: Mapping[str, str]) -> bool:
+    """True when the caller has picked the ssh command, by any of git's three routes.
+
+    git uses ``GIT_SSH_COMMAND`` first, then ``core.sshCommand``, then ``GIT_SSH``
+    (connect.c), so a default ``GIT_SSH_COMMAND`` would override the other two. The
+    environment variables are checked by presence, as ``setdefault`` would;
+    ``core.sshCommand`` is read from git's own configuration.
+    """
+    if "GIT_SSH_COMMAND" in env or "GIT_SSH" in env:
+        return True
+    try:
+        probe = subprocess.run(
+            ["git", "config", "--get", "core.sshCommand"],
+            capture_output=True,
+            text=True,
+            env=dict(env),
+        )
+    except OSError:  # no git binary: the command that needs it says so
+        return False
+    return probe.returncode == 0 and bool(probe.stdout.strip())
+
+
+def _batch_mode_blocked(detail: str, env: Mapping[str, str]) -> bool:
+    """True when *detail* is ssh refusing to prompt under the default :func:`_git_env` set."""
+    return (
+        env.get("GIT_SSH_COMMAND") == _SSH_BATCH_MODE
+        and os.environ.get("GIT_SSH_COMMAND") != _SSH_BATCH_MODE
+        and any(marker in detail for marker in _PROMPT_FAILURES)
+    )
 
 
 def _looks_like_full_sha(ref: str) -> bool:
@@ -207,7 +264,7 @@ class GitResolver(Resolver):
         # Fast path: shallow-fetch just the pinned commit. Needs the server to
         # allow fetching a reachable sha (uploadpack.allowReachableSHA1InWant —
         # GitHub / GitLab / Bitbucket support it).
-        if self._git_ok(["-C", str(cache_dir), "fetch", "--depth", "1", clone_url, ref]):
+        if self._git_ok(["-C", str(cache_dir), "fetch", "--depth", "1", clone_url, ref], url=url):
             target = "FETCH_HEAD"
         else:
             # Fallback for servers that disallow fetch-by-sha (mirrors
@@ -231,19 +288,20 @@ class GitResolver(Resolver):
     @staticmethod
     def _git(args: List[str], *, clone_url: str, url: str, what: str) -> None:
         """Run a git subcommand, redacting any embedded token from errors."""
+        env = _git_env(url)
         try:
-            subprocess.run(
-                ["git", *args], check=True, capture_output=True, text=True, env=_git_env()
-            )
+            subprocess.run(["git", *args], check=True, capture_output=True, text=True, env=env)
         except FileNotFoundError as e:
             raise ResolutionError("git resolver requires the 'git' binary on PATH") from e
         except subprocess.CalledProcessError as e:
             # Hide the token from any error output before re-raising.
-            stderr = (e.stderr or "").replace(clone_url, _sanitise_url(url))
-            raise ResolutionError(f"git {what} failed: {stderr.strip()}") from None
+            detail = (e.stderr or "").replace(clone_url, _sanitise_url(url)).strip()
+            if _batch_mode_blocked(detail, env):
+                detail += "\n" + _BATCH_MODE_HINT
+            raise ResolutionError(f"git {what} failed: {detail}") from None
 
     @staticmethod
-    def _git_ok(args: List[str]) -> bool:
+    def _git_ok(args: List[str], *, url: str = "") -> bool:
         """Best-effort probe: True on success, False on a non-zero git exit.
 
         Used only to decide whether the shallow fetch-by-sha fast path worked
@@ -252,7 +310,7 @@ class GitResolver(Resolver):
         """
         try:
             subprocess.run(
-                ["git", *args], check=True, capture_output=True, text=True, env=_git_env()
+                ["git", *args], check=True, capture_output=True, text=True, env=_git_env(url)
             )
             return True
         except (FileNotFoundError, subprocess.CalledProcessError):
