@@ -114,3 +114,17 @@ def test_unknown_sha_raises_cleanly(_cache):
     missing = "0" * 40
     with pytest.raises(ResolutionError):
         GitResolver().resolve({"kind": "git", "url": info["url"], "ref": missing})
+
+
+def test_a_failed_run_does_not_poison_the_cache_for_the_next_one(_cache):
+    # `git init` has already made the cache directory when the fetch fails. The next run must
+    # not find that empty repository and take it for a finished clone.
+    info = _make_upstream(_cache)
+    (_cache / "upstream").rename(_cache / "elsewhere")  # the URL points at nothing (yet)
+    source = {"kind": "git", "url": info["url"], "ref": info["sha_c2"]}
+    with pytest.raises(ResolutionError):
+        GitResolver().resolve(source)
+    assert not GitResolver._cache_dir_for(info["url"], info["sha_c2"]).exists()
+
+    (_cache / "elsewhere").rename(_cache / "upstream")  # it is there now
+    assert (GitResolver().resolve(source).bundle_root / MANIFEST).is_file()

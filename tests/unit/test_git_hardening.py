@@ -108,6 +108,25 @@ def test_a_failed_scrub_deletes_the_clone_instead_of_keeping_the_token(
     assert not cache.exists()
 
 
+@pytest.mark.parametrize("failure", [ResolutionError("git failed"), KeyboardInterrupt()])
+@pytest.mark.parametrize("ref", ["v1", "a" * 40])
+def test_a_clone_that_stops_part_way_leaves_nothing_to_reuse(
+    monkeypatch, tmp_path: Path, ref: str, failure: BaseException
+) -> None:
+    cache = tmp_path / "cache" / "clone"
+
+    def stops(args, *, clone_url, url, what):
+        cache.mkdir(parents=True, exist_ok=True)  # git has made the directory by now
+        raise failure
+
+    monkeypatch.setattr(GitResolver, "_git", staticmethod(stops))
+
+    with pytest.raises(type(failure)):
+        GitResolver()._clone_into_cache(PLAIN_URL, ref, cache, {})
+
+    assert not cache.exists()
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="git binary not on PATH")
 def test_scrub_removes_the_token_from_a_real_repository_config(tmp_path: Path) -> None:
     repo = tmp_path / "clone"

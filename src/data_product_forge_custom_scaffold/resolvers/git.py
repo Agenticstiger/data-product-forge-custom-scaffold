@@ -220,12 +220,19 @@ class GitResolver(Resolver):
                 )
             clone_url = self._inject_token(url, token)
 
-        if _looks_like_full_sha(ref):
-            self._fetch_sha_into_cache(clone_url, ref, cache_dir, url)
-        else:
-            self._clone_ref_into_cache(clone_url, ref, cache_dir, url)
-            if clone_url != url:
-                self._scrub_token(cache_dir, clone_url, url)
+        try:
+            if _looks_like_full_sha(ref):
+                self._fetch_sha_into_cache(clone_url, ref, cache_dir, url)
+            else:
+                self._clone_ref_into_cache(clone_url, ref, cache_dir, url)
+                if clone_url != url:
+                    self._scrub_token(cache_dir, clone_url, url)
+        except BaseException:
+            # An empty or half-made directory must not stay for a later run to reuse as if
+            # it were a finished clone. This covers an interrupt (``KeyboardInterrupt``)
+            # too, not only a failed git command.
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            raise
 
     def _scrub_token(self, cache_dir: Path, clone_url: str, url: str) -> None:
         """Reset a token clone's ``origin`` to the credential-free URL.
