@@ -49,8 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refused: a user part can be the token, and it would have been written into the lock as
     `mirror_url`. Drop the user from the url, and use `auth` for a private repository. An
     `ssh://git@host/...` or `git@host:org/repo` url keeps its account name.
-  - `auth` that is not a mapping (`auth: FLUID_SCAFFOLD_TOKEN`) is an error; before, the
-    source went on without a credential and nothing said so.
+  - `auth` that is not a mapping (`auth: FLUID_SCAFFOLD_TOKEN`, `auth: false`) is an error;
+    before, the source went on without a credential and nothing said so. An absent `auth`
+    is still none.
   - A `url` with a control character in it (a NUL, a newline) is refused.
 
   To migrate, rename the variable (`GITHUB_TOKEN` to `FLUID_SCAFFOLD_GITHUB_TOKEN`, in the

@@ -255,7 +255,7 @@ class GitResolver(Resolver):
             if cache_dir.is_dir():  # also on a refresh: if the fetch fails the old clone stays
                 _drop_stored_credentials(cache_dir, url)
         if not cache_dir.is_dir() or refetch:
-            self._clone_into_cache(url, ref, cache_dir, source.get("auth") or {})
+            self._clone_into_cache(url, ref, cache_dir, source.get("auth"))
 
         bundle_root = (cache_dir / subdir).resolve() if subdir else cache_dir
         # Confine: subdir must stay under cache_dir.
@@ -296,7 +296,7 @@ class GitResolver(Resolver):
         url: str,
         ref: str,
         cache_dir: Path,
-        auth: Mapping[str, Any],
+        auth: Any,
     ) -> None:
         credential = _credential(url, auth)
 
@@ -439,7 +439,7 @@ def _validated(source: Mapping[str, Any]) -> Tuple[str, str, str, Optional["_Aut
             "git source url must not carry credentials (they would reach the lock); "
             "name an environment variable in auth.secret_ref instead"
         )
-    binding = _bind_auth(url, source.get("auth") or {})
+    binding = _bind_auth(url, source.get("auth"))
     return url, str(ref), source.get("subdir") or "", binding
 
 
@@ -518,10 +518,12 @@ def _allowed_endpoints() -> Set[str]:
 def _bind_auth(url: str, auth: Any) -> Optional[_AuthBinding]:
     """Check what a source asks for against what the operator allows. Reads no token.
 
-    *auth* is what the contract wrote; anything but a mapping is an error rather than a
-    source that quietly goes without a credential. A refusal names the setting that would
-    allow the source, never a value.
+    *auth* is what the contract wrote. Absent (None) means no credential; anything else but a
+    mapping is an error rather than a source that quietly goes without one. A refusal names
+    the setting that would allow the source, never a value.
     """
+    if auth is None:
+        return None
     if not isinstance(auth, Mapping):
         raise ResolutionError(
             "auth must be a mapping, for example {secret_ref: FLUID_SCAFFOLD_TOKEN}"
@@ -562,7 +564,7 @@ def _bind_auth(url: str, auth: Any) -> Optional[_AuthBinding]:
     return _AuthBinding(endpoint=endpoint, name=secret_ref)
 
 
-def _credential(url: str, auth: Mapping[str, Any]) -> Optional[_Credential]:
+def _credential(url: str, auth: Any) -> Optional[_Credential]:
     """The credential a source may use, with its token read, or None when it asks for none."""
     binding = _bind_auth(url, auth)
     if binding is None:

@@ -204,12 +204,14 @@ def test_a_secret_name_must_be_a_plain_variable_name(operator, name) -> None:
             _bind_auth(URL, auth)
 
 
-@pytest.mark.parametrize("auth", [{}, {"hosts": ["x"]}])
+@pytest.mark.parametrize("auth", [None, {}, {"hosts": ["x"]}])
 def test_an_auth_block_that_asks_for_nothing_asks_for_nothing(operator, auth) -> None:
     assert _bind_auth(URL, auth) is None
 
 
-@pytest.mark.parametrize("auth", ["FLUID_SCAFFOLD_TOKEN", ["FLUID_SCAFFOLD_TOKEN"], 7, True])
+@pytest.mark.parametrize(
+    "auth", ["FLUID_SCAFFOLD_TOKEN", ["FLUID_SCAFFOLD_TOKEN"], 7, True, "", 0, False, []]
+)
 def test_an_auth_that_is_not_a_mapping_is_an_error_not_a_source_without_a_credential(
     operator, monkeypatch, auth
 ) -> None:
