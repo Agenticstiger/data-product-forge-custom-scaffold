@@ -6,8 +6,9 @@ Registered as a CLI plugin via:
     generate-custom-scaffold = "data_product_forge_custom_scaffold.cli:register"
 
 The FLUID CLI calls :func:`register` with its argparse subparser group and
-expects a ``func`` attribute set on the parser. We wire that to :func:`run`
-which delegates to the :class:`Engine`.
+expects a ``func`` attribute set on the parser. We wire that to :func:`run`,
+which calls the library entry point :func:`~data_product_forge_custom_scaffold.api.generate`
+and renders its result; ``--update`` goes through the :class:`Engine` directly.
 
 White-label packages call :func:`make_register` with their own
 :class:`~data_product_forge_custom_scaffold.dialect.ScaffoldDialect` to get a
@@ -25,9 +26,11 @@ from typing import Any, Callable, Mapping
 
 import yaml
 
+from .api import generate
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
-from .engine import Engine, EngineError
+from .engine import Engine
+from .errors import ApplyError, EngineError
 from .update import UpdateError
 from .validation import make_schema_provider
 
@@ -147,35 +150,42 @@ def run(args: argparse.Namespace, *, dialect: ScaffoldDialect = DEFAULT_DIALECT)
     contract = _load_contract(contract_path)
     output_root = Path(args.output).resolve()
 
-    engine = Engine(
-        output_root=output_root,
-        contract_dir=contract_path.parent,
-        dialect=dialect,
-    )
-
     if getattr(args, "update", False):
+        engine = Engine(
+            output_root=output_root,
+            contract_dir=contract_path.parent,
+            dialect=dialect,
+        )
         return _run_update(engine, contract, args=args, output_root=output_root)
 
+    apply_failed = False
     try:
-        result = engine.run(
+        run = generate(
             contract,
+            output_root,
+            contract_dir=contract_path.parent,
             dry_run=args.dry_run,
             pattern_filter=args.pattern,
             library_filter=args.lib,
             pin=getattr(args, "pin", False),
-        )
+            dialect=dialect,
+        ).run
+    except ApplyError as e:
+        if e.run is None:  # apply() raised, or a planned file never appeared
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        # apply() reported failed files: still show the summary, then exit 3.
+        run, apply_failed = e.run, True
     except EngineError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
     if args.json:
-        _emit_json(result, dry_run=args.dry_run)
+        _emit_json(run, dry_run=args.dry_run)
     else:
-        _emit_human(result, dry_run=args.dry_run, output_root=output_root)
+        _emit_human(run, dry_run=args.dry_run, output_root=output_root)
 
-    if result.apply_result is not None and result.apply_result.failed > 0:
-        return 3
-    return 0
+    return 3 if apply_failed else 0
 
 
 def _run_update(engine: Engine, contract: Mapping[str, Any], *, args, output_root: Path) -> int:
