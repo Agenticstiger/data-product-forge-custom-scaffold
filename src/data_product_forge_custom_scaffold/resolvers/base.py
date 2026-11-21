@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+from ..errors import BundleError
 
-class ResolutionError(RuntimeError):
+
+class ResolutionError(BundleError):
     """Raised when a bundle cannot be fetched / validated."""
 
 
