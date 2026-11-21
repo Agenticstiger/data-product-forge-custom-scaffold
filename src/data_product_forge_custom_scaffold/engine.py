@@ -41,7 +41,15 @@ from .errors import (
     PlanError,
     UnsafePathError,
 )
-from .lockfile import LOCKFILE_NAME, build_lock, dump_lock, pin_source, read_lock, write_lock
+from .lockfile import (
+    LOCKFILE_NAME,
+    build_lock,
+    dump_lock,
+    lock_path,
+    pin_source,
+    read_lock,
+    write_lock,
+)
 from .resolvers import ResolvedBundle, resolve_bundle
 from .templated import TemplatedCustomScaffold
 from .update import UpdateError, UpdateResult, actions_to_render, merge_renders
@@ -125,6 +133,11 @@ class Engine:
             # Thread contract_dir so relative `path:` sources anchor to
             # the contract's directory, not the invoking process cwd.
             resolved[lib_id] = resolve_bundle(source, contract_dir=self.contract_dir)
+
+        if resolved:
+            # The lock is written last; refuse a symlink planted at its name now, before
+            # any pattern is applied (and on a dry run, which checks every path).
+            lock_path(self.output_root)
 
         # 2. Plan + apply each pattern.
         all_actions: List[Dict[str, Any]] = []

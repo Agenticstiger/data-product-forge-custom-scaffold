@@ -39,7 +39,7 @@ from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
 from .engine import Engine, EngineRunResult
 from .errors import ApplyError, OutputError
-from .lockfile import LOCKFILE_NAME
+from .lockfile import LOCKFILE_NAME, lock_path
 
 __all__ = ["generate", "GenerationResult", "GeneratedFile"]
 
@@ -117,11 +117,12 @@ def generate(
         contract_dir: the directory a relative ``path:`` source is resolved against.
             Defaults to the current working directory, so pass the contract file's
             directory for a result that does not depend on where the process runs.
-        dry_run: plan and check every path, write nothing. ``files`` is then what a
-            real run would write, with the digests of the planned bytes. A dry run
-            does not touch the filesystem, so it cannot predict an I/O failure a
-            real run would hit (an unwritable directory, a directory where a file
-            is planned).
+        dry_run: plan and check every path, write nothing under *out_dir*. ``files``
+            is then what a real run would write, with the digests of the planned
+            bytes. A dry run still resolves the libraries (a ``git`` source is
+            cloned into the per-user cache) but writes no file into *out_dir*, so it
+            cannot predict an I/O failure a real run would hit (an unwritable
+            directory, a directory where a file is planned).
         pattern_filter: only run patterns whose ``use:`` value is listed. A sequence
             of strings; a bare string raises ``TypeError``.
         library_filter: only resolve libraries whose id is listed. A sequence of
@@ -148,7 +149,9 @@ def generate(
             such pattern, or its plugin class fails to initialise.
         PlanError: a pattern's ``plan()`` failed.
         UnsafePathError: a planned path would land outside *out_dir*. Each pattern's
-            paths are checked before that pattern is applied, on a dry run too.
+            paths are checked before that pattern is applied, on a dry run too. So
+            is a symlink at ``fluid-scaffold.lock``, which is refused before any
+            pattern is applied (the lock is never written or read through a link).
         ApplyError: ``apply()`` raised or reported failed files. Its ``run``
             attribute holds the engine run when failures were reported.
         OutputError: the run finished but a planned file cannot be described: it is
@@ -226,6 +229,7 @@ def _describe_output(
     if dry_run and run.lock_text is not None:
         entries[LOCKFILE_NAME] = _describe(LOCKFILE_NAME, run.lock_text.encode("utf-8"))
     if not dry_run and run.lockfile is not None:
+        lock_path(out_root)  # read the lock back like any output: never through a symlink
         entries[LOCKFILE_NAME] = _read_back(out_root, LOCKFILE_NAME, run)
     return tuple(entries[rel] for rel in sorted(entries))
 

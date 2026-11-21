@@ -17,12 +17,16 @@ layered on top (see the resolver/engine pin path).
 
 from __future__ import annotations
 
+import errno
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 import yaml
 
+from .confinement import confine
+from .errors import UnsafePathError
 from .resolvers.base import ResolvedBundle
 
 LOCKFILE_NAME = "fluid-scaffold.lock"
@@ -108,20 +112,57 @@ def dump_lock(lock: Mapping[str, Any]) -> str:
     return _HEADER + body
 
 
+def lock_path(output_root: Path) -> Path:
+    """Where the lock lives under *output_root*, refusing a symlink planted there.
+
+    ``fluid-scaffold.lock`` is the engine's own file and is never a symlink. Writing
+    through one would put the lock — which records contract variables verbatim — into
+    the link's target (a file outside the output directory, or another file inside
+    it), and reading through one would parse that target. Raises
+    :class:`~data_product_forge_custom_scaffold.errors.UnsafePathError`.
+    """
+    root = Path(output_root).resolve()
+    path = root / LOCKFILE_NAME
+    if path.is_symlink():
+        raise UnsafePathError(
+            f"{LOCKFILE_NAME!r} in the output directory is a symlink; refusing to use it"
+        )
+    confine(root, LOCKFILE_NAME)  # and it resolves to a file inside the root
+    return path
+
+
 def write_lock(output_root: Path, lock: Mapping[str, Any]) -> Path:
-    """Write the lock to ``<output_root>/fluid-scaffold.lock`` and return its path."""
-    output_root = Path(output_root)
-    output_root.mkdir(parents=True, exist_ok=True)
-    path = output_root / LOCKFILE_NAME
-    # newline="\n": write_text would turn "\n" into CRLF on Windows, and the lock's
+    """Write the lock to ``<output_root>/fluid-scaffold.lock`` and return its path.
+
+    Never writes through a symlink at that name (``UnsafePathError``): the path is
+    checked first, and where the platform has ``O_NOFOLLOW`` the open itself refuses a
+    link that appeared since.
+    """
+    path = lock_path(output_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o666)  # the mode write_text uses; the umask applies
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise UnsafePathError(
+                f"{LOCKFILE_NAME!r} in the output directory is a symlink; refusing to use it"
+            ) from None
+        raise
+    # newline="\n": text mode would turn "\n" into CRLF on Windows, and the lock's
     # bytes (and so its digest) must not depend on the platform.
-    path.write_text(dump_lock(lock), encoding="utf-8", newline="\n")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(dump_lock(lock))
     return path
 
 
 def read_lock(output_root: Path) -> Dict[str, Any]:
-    """Load an existing lock, or ``{}`` if none is present."""
-    path = Path(output_root) / LOCKFILE_NAME
+    """Load an existing lock, or ``{}`` if none is present.
+
+    Refuses a symlink at the lock's name (``UnsafePathError``), as :func:`write_lock`
+    does.
+    """
+    path = lock_path(output_root)
     if not path.is_file():
         return {}
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
