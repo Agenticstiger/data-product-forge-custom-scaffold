@@ -30,8 +30,6 @@ from data_product_forge_custom_scaffold import (
     generate,
 )
 from data_product_forge_custom_scaffold.lockfile import LOCKFILE_NAME
-from data_product_forge_custom_scaffold.resolvers.base import ResolvedBundle
-from data_product_forge_custom_scaffold.resolvers.entrypoint import EntryPointResolver
 from tests.helpers import (
     FIXTURES,
     SECRET,
@@ -388,38 +386,24 @@ def test_a_relative_path_source_anchors_to_contract_dir_not_cwd(
     assert generate(contract, tmp_path / "c").files == anchored.files
 
 
-def test_python_plugin_bundle_files_are_listed(tmp_path: Path, monkeypatch) -> None:
-    class _Plugin(CustomScaffold):
+def test_a_python_plugin_scaffold_is_listed_through_its_own_apply(
+    tmp_path: Path, monkeypatch
+) -> None:
+    out = tmp_path / "out"
+
+    class _Plugin(CustomScaffold):  # the SDK's default apply() does the writing
         name = "plug"
 
-        def __init__(self, *, output_root=None, pattern_name=None, variables=None, **kwargs):
-            super().__init__(output_root=output_root, **kwargs)
-
         def plan(self, contract):
-            return [write_file_action(path="plugin/out.txt", content=b"hello\n").to_dict()]
+            return _one_file()
 
-    monkeypatch.setattr(
-        EntryPointResolver,
-        "resolve",
-        lambda self, src, *, contract_dir=None: ResolvedBundle(
-            kind="entrypoint", plugin_class=_Plugin, resolved_version="1.2.3"
-        ),
-    )
-    contract = {
-        "id": "x",
-        "extensions": {
-            "customScaffold": {
-                "libraries": [{"id": "plug", "source": {"kind": "entrypoint", "name": "plug"}}],
-                "patterns": [{"use": "plug:default"}],
-            }
-        },
-    }
+    use_scaffold(monkeypatch, _Plugin(output_root=out))
+    bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
-    result = generate(contract, tmp_path / "out")
+    result = generate(path_contract(bundle, ["p"]), out)
 
-    assert [f.path for f in result.files] == [LOCKFILE_NAME, "plugin/out.txt"]
-    assert _rows(result)["plugin/out.txt"] == (HELLO_SHA256, 6)
-    assert result.run.resolved_libraries["plug"].resolved_version == "1.2.3"
+    assert [f.path for f in result.files] == ["a.txt", LOCKFILE_NAME]
+    assert _rows(result) == tree_digests(out)
 
 
 # ── no printing, no side effects ─────────────────────────────────────────────

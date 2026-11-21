@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
 
 from data_product_forge_custom_scaffold import Engine
+from tests.helpers import tree_digests
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -42,14 +42,6 @@ CONTRACT = {
         }
     },
 }
-
-
-def _hash_tree(root: Path) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for p in sorted(root.rglob("*")):
-        if p.is_file():
-            out[p.relative_to(root).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
-    return out
 
 
 def test_full_round_trip(tmp_path: Path) -> None:
@@ -101,7 +93,7 @@ def test_determinism_byte_identical(tmp_path: Path) -> None:
     Engine(output_root=out_a).run(CONTRACT)
     Engine(output_root=out_b).run(CONTRACT)
 
-    assert _hash_tree(out_a) == _hash_tree(out_b)
+    assert tree_digests(out_a) == tree_digests(out_b)
 
 
 def test_dry_run_writes_nothing(tmp_path: Path) -> None:
