@@ -39,7 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `host:port` entry. Unset or empty, none: a source with `auth` is refused.
   - `secret_ref` must name a variable that starts with `FLUID_SCAFFOLD_`, or with a prefix
     listed in `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated). It is checked
-    before the environment is read.
+    before the environment is read. Each operator prefix must be at least four characters
+    and must not start with `GIT_`: a shorter one would also match ordinary variables such
+    as `PATH`, and `GIT_` is git's own namespace. Any other entry refuses every git source,
+    with an error that names it. Choose a specific prefix: an entry that is the name of an
+    ordinary variable still matches it.
   - `auth` goes only with an `https://` url of the plain form `https://host[:port]/path`
     (an ASCII host name; no user, brackets, escapes, backslashes, query or fragment, which
     a url parser could read two ways). With `git+https://` (which used to go without the
@@ -126,9 +130,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer used, so nothing would ever have cleaned them) is deleted at the start of every
   run, but only if the engine made it: it must sit in `<cache>/git/<16 hex digits>/`, and
   that directory must be named for the digest of the clone's own origin url without the
-  token. The sweep looks at nothing else, so a `FLUID_CUSTOM_SCAFFOLD_CACHE` that points at
+  token (or of the url as the contract wrote it, for a clone whose own url carried the
+  credential: 0.1.0 to 0.4.1 accepted `https://<token>@host/...`). The sweep looks at
+  nothing else, so a `FLUID_CUSTOM_SCAFFOLD_CACHE` that points at
   a wide directory such as `$HOME` costs nothing (`~/git/<org>/<repo>` is not touched), and a
-  `<cache>/git` that is a symbolic link is not swept at all. A cache entry that is a
+  `<cache>/git` that is a symbolic link is not swept at all. One race remains, once, after
+  an upgrade: a run that is cleaning such a clone can lose it to the sweep of another run
+  and fail once; nothing else is lost, and the next run fetches the clone again. A cache entry that is a
   symbolic link, or whose `.git` or `.git/config` is one, is refused instead of reused or
   written through.
 - **A failed, interrupted or killed fetch no longer leaves a directory for the next run to

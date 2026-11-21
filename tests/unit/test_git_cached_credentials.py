@@ -22,7 +22,7 @@ from data_product_forge_custom_scaffold.resolvers.git import (
     _has_credentials,
     _stored_credentials,
 )
-from tests.helpers import git_source
+from tests.helpers import git_source, unfinished_clone
 
 TOKEN = "s3cret-token-value"
 PLAIN = "https://example.invalid/org/repo"
@@ -55,14 +55,6 @@ def _cached_clone(tmp_path: Path, origin: str, url: str = PLAIN, ref: str = "v1"
     cache_dir.parent.mkdir(parents=True)
     _git("clone", "-q", str(upstream), str(cache_dir))
     _git("-C", str(cache_dir), "remote", "set-url", "origin", origin)
-    return cache_dir
-
-
-def _unfinished_clone(origin: str, url: str = PLAIN, ref: str = "v1") -> Path:
-    """What a run killed mid-transfer leaves: a repository with a config and no commit."""
-    cache_dir = GitResolver._cache_dir_for(url, ref)
-    (cache_dir / ".git").mkdir(parents=True)
-    (cache_dir / ".git" / "config").write_text(f'[remote "origin"]\n\turl = {origin}\n')
     return cache_dir
 
 
@@ -131,7 +123,7 @@ def test_an_unfinished_clone_that_holds_a_token_is_deleted_not_scrubbed_and_kept
 ) -> None:
     # A run killed mid-transfer has no commit: keeping it would only fail later with
     # "missing fluid-scaffold.yaml", for good. It is fetched again instead.
-    cache_dir = _unfinished_clone(WITH_TOKEN)
+    cache_dir = unfinished_clone(WITH_TOKEN, PLAIN)
     monkeypatch.setattr(GitResolver, "_git", staticmethod(_must_not_run))  # no scrub attempted
     fetched = _fetch_that_records(monkeypatch)
 
@@ -193,7 +185,7 @@ def test_a_clone_that_can_be_neither_scrubbed_nor_deleted_is_an_error(
 
 
 def test_a_tainted_clone_is_never_left_half_deleted(cache: Path, monkeypatch) -> None:
-    cache_dir = _unfinished_clone(WITH_TOKEN)
+    cache_dir = unfinished_clone(WITH_TOKEN, PLAIN)
     real_rmtree = shutil.rmtree
 
     def interrupted(path, *args, **kwargs):
@@ -238,7 +230,7 @@ def test_a_broken_clone_never_makes_git_rewrite_a_parent_repository(
     _git("-C", str(parent), *identity, "commit", "-q", "--allow-empty", "-m", "c")
     _git("-C", str(parent), "remote", "add", "origin", "https://parent.example/dotfiles")
     monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_CACHE", str(parent / "cache"))
-    _unfinished_clone(WITH_TOKEN)
+    unfinished_clone(WITH_TOKEN, PLAIN)
     fetched = _fetch_that_records(monkeypatch)
 
     GitResolver().resolve(_source())
@@ -255,7 +247,7 @@ def test_a_broken_clone_never_makes_git_rewrite_a_parent_repository(
     ids=["plain https", "ssh user name", "scp-style"],
 )
 def test_a_clone_with_no_credential_is_reused_as_it_is(cache: Path, monkeypatch, origin) -> None:
-    cache_dir = _unfinished_clone(origin)
+    cache_dir = unfinished_clone(origin, PLAIN)
     (cache_dir / MANIFEST).write_text("apiVersion: forge.scaffold/v1\n")
     _never_fetch(monkeypatch)
     monkeypatch.setattr(GitResolver, "_git", staticmethod(_must_not_run))
@@ -345,7 +337,7 @@ def test_a_token_that_cannot_be_deleted_is_an_error_even_after_the_rename(
     # The clone is renamed aside, so the cache path is clear, but the files cannot go (a read-only
     # directory, say). The token is still on disk, so this must not pass silently, and the
     # message says where it is.
-    _unfinished_clone(WITH_TOKEN)
+    unfinished_clone(WITH_TOKEN, PLAIN)
     real_rmtree = shutil.rmtree
 
     def stuck(path, *args, **kwargs):
@@ -365,7 +357,7 @@ def test_a_token_that_cannot_be_deleted_is_an_error_even_after_the_rename(
 def test_leftovers_that_hold_no_credential_are_not_an_error(cache: Path, monkeypatch) -> None:
     # A delete that leaves only read-only object files (common on Windows) has removed the token:
     # the run goes on and fetches again, the leftovers are litter.
-    cache_dir = _unfinished_clone(WITH_TOKEN)
+    cache_dir = unfinished_clone(WITH_TOKEN, PLAIN)
     (cache_dir / ".git" / "objects").mkdir()
     (cache_dir / ".git" / "objects" / "pack.pack").write_text("read-only")
     real_rmtree = shutil.rmtree
