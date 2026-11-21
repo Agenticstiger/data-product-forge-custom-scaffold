@@ -153,7 +153,10 @@ class GitResolver(Resolver):
             )
 
         cache_dir = self._cache_dir_for(url, str(ref))
-        if not cache_dir.is_dir() or os.environ.get("FLUID_CUSTOM_SCAFFOLD_NOCACHE"):
+        refetch = bool(os.environ.get("FLUID_CUSTOM_SCAFFOLD_NOCACHE"))
+        if cache_dir.is_dir() and not refetch:
+            self._drop_stored_credentials(cache_dir, url)
+        if not cache_dir.is_dir() or refetch:
             self._clone_into_cache(url, str(ref), cache_dir, source.get("auth") or {})
 
         bundle_root = (cache_dir / subdir).resolve() if subdir else cache_dir
@@ -233,6 +236,24 @@ class GitResolver(Resolver):
             # too, not only a failed git command.
             shutil.rmtree(cache_dir, ignore_errors=True)
             raise
+
+    def _drop_stored_credentials(self, cache_dir: Path, url: str) -> None:
+        """Take a token out of a cached clone's ``.git/config`` before the clone is reused.
+
+        A clone made by an earlier version, or by a run that was killed while it
+        transferred, can carry ``https://x-access-token:<token>@host/...`` as ``origin``.
+        Put the plain URL back; if that fails, delete the clone so it is fetched again.
+        Credentials that the source's own ``url`` carries are the contract author's
+        choice and are left alone.
+        """
+        origin = _origin_url(cache_dir)
+        if origin == url or not _has_credentials(origin):
+            return
+        try:
+            self._scrub_token(cache_dir, origin, url)
+        except ResolutionError:
+            if cache_dir.exists():  # it could not even be deleted: do not reuse it
+                raise
 
     def _scrub_token(self, cache_dir: Path, clone_url: str, url: str) -> None:
         """Reset a token clone's ``origin`` to the credential-free URL.
@@ -341,6 +362,44 @@ class GitResolver(Resolver):
 def _safe_ref(ref: str) -> str:
     """Sanitise a ref name for use as a cache directory."""
     return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in ref)
+
+
+_ORIGIN_SECTION = re.compile(r'\[\s*remote\s+"origin"\s*\]|\[\s*remote\.origin\s*\]', re.IGNORECASE)
+_URL_LINE = re.compile(r"url\s*=\s*(.*)", re.IGNORECASE)
+_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*)://([^/?#@]*)@", re.IGNORECASE)
+
+
+def _origin_url(cache_dir: Path) -> str:
+    """The ``remote.origin.url`` in a cached clone's git config ("" when there is none).
+
+    The file is read directly, so a cache that is reused without ever running git
+    still works without the ``git`` binary.
+    """
+    try:
+        text = (cache_dir / ".git" / "config").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    in_origin = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            in_origin = bool(_ORIGIN_SECTION.fullmatch(line))
+        elif in_origin:
+            match = _URL_LINE.fullmatch(line)
+            if match:
+                return match.group(1).strip().strip('"')
+    return ""
+
+
+def _has_credentials(url: str) -> bool:
+    """True when *url* embeds a secret: any user part on http(s), a password elsewhere.
+
+    ``ssh://git@host/...`` and ``git@host:path`` only name the account; that is not one.
+    """
+    match = _USERINFO.match(url)
+    if not match:
+        return False
+    return match.group(1).lower() in ("http", "https") or ":" in match.group(2)
 
 
 def _sanitise_url(url: str) -> str:
