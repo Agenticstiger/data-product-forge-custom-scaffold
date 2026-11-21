@@ -77,8 +77,12 @@ jobs:
 
       - name: Parse version
         id: meta
+        # The tag reaches the script through the environment, never by interpolation: a tag
+        # name is chosen by whoever pushes it, and `$(...)` or a backtick in one would run as
+        # shell here if `${{ }}` were pasted into the script.
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           if [[ "$VERSION" == *a* ]] || [[ "$VERSION" == *b* ]] || [[ "$VERSION" == *dev* ]] || [[ "$VERSION" == *rc* ]]; then
@@ -103,9 +107,11 @@ jobs:
         run: pytest tests/ -v
 
       - name: Verify version matches tag
+        # The version is the tag minus `v`, so it is passed the same way.
+        env:
+          TAG_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          TAG_VERSION="${{ steps.meta.outputs.version }}"
           TAG_BASE=$(echo "$TAG_VERSION" | sed 's/[ab].*//' | sed 's/\.dev.*//' | sed 's/rc.*//')
           if [ "$PKG_VERSION" != "$TAG_BASE" ] && [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
             echo "::error::Version mismatch: pyproject.toml=${PKG_VERSION}, tag=${TAG_VERSION}"
