@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "data-product-forge-custom-scaffold"
-version = "0.4.1"
+version = "0.5.0"
 description = "Custom-scaffold engine for data-product-forge — install, plug in any scaffold bundle (Python plugin or YAML/Jinja), generate a complete project from your contract"
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.10"
@@ -37,7 +37,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "data-product-forge-sdk>=0.9,<1",   # role-typed ABCs + ContractHelper (import path: fluid_sdk)
+    "data-product-forge-sdk>=0.11.0,<1",  # role-typed ABCs + ContractHelper; 0.11 writes files without following a planted symlink (import path: fluid_sdk)
     "Jinja2>=3.1",                      # template engine for YAML/Jinja bundles
     "PyYAML>=6.0",                      # parse fluid-scaffold.yaml manifests
     "jsonschema>=4.17",                 # validate contract.extensions.customScaffold
