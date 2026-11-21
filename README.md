@@ -141,7 +141,7 @@ for f in result.files:
     print(f.path, f.sha256, f.size)
 ```
 
-`generate()` runs what `fluid custom-scaffold` runs and returns every file it left in
+`generate()` runs what `fluid custom-scaffold` runs and returns every file it wrote to
 the output directory as `(relative path, sha256, size)`, sorted by path — so a host
 can record the written files in a manifest without parsing `--json`. A dry run
 (`dry_run=True`) writes nothing and returns the same rows; a path that would leave

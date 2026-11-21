@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `generate(contract, out_dir, *, contract_dir=None, dry_run=False,
   pattern_filter=None, library_filter=None, pin=False, dialect=DEFAULT_DIALECT)
   -> GenerationResult` runs the pipeline `fluid custom-scaffold` runs and returns
-  every file it left in `out_dir` as `GeneratedFile(path, sha256, size)`, sorted by
+  every file it wrote to `out_dir` as `GeneratedFile(path, sha256, size)`, sorted by
   path, so a host can record the written files in a manifest. The reproducibility
   lock is listed too. After a real run each digest is read back from disk; a dry run
   writes nothing, does not create `out_dir`, and returns the same rows from the

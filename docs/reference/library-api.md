@@ -2,7 +2,7 @@
 
 `generate()` is the engine as a function. It runs exactly what `fluid custom-scaffold`
 runs — resolve each library, render each pattern, write the files, record
-`fluid-scaffold.lock` — and returns every file it left in the output directory as
+`fluid-scaffold.lock` — and returns every file it wrote to the output directory as
 `(relative path, sha256, size)`. A host or tool that needs those rows (to record them
 in a manifest, say) calls it directly instead of running the command and parsing
 `--json`.
@@ -69,7 +69,7 @@ All parameters after `out_dir` are keyword-only.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `files` | `tuple[GeneratedFile, ...]` | Every file the run left in `out_dir`, sorted by `path`. |
+| `files` | `tuple[GeneratedFile, ...]` | Every file the run wrote to `out_dir`, sorted by `path`. |
 | `dry_run` | `bool` | Whether nothing was written. |
 | `run` | `EngineRunResult` | The raw engine run — planned actions, the SDK's apply summary, the resolved libraries and their versions — for a caller that needs per-action detail. Not part of equality or `repr`. |
 
@@ -89,9 +89,11 @@ manifest = [{"path": f.path, "sha256": f.sha256, "size": f.size} for f in result
 
 ### What `files` contains
 
-- **The whole generated tree.** Scaffold files plus the reproducibility lock
-  (`fluid-scaffold.lock`), so a verifier that walks `out_dir` finds no file the list
-  does not account for. Filter on the lock's name if you only want scaffold files.
+- **The whole generated output.** Scaffold files plus the reproducibility lock
+  (`fluid-scaffold.lock`), so for a fresh `out_dir` a verifier that walks it finds no
+  file the list does not account for. (Files that were already in `out_dir` and that
+  the run did not write are not listed.) Filter on the lock's name if you only want
+  the scaffold files.
 - **Deterministic order.** Sorted by `path` in code-point order, independent of the
   order patterns run in, filesystem order, and platform.
 - **One row per path.** When two patterns write the same path, the later pattern's
