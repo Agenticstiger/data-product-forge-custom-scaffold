@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import pytest
-from fluid_sdk import CustomScaffold, ExecutionResult, write_file_action
+from fluid_sdk import ExecutionResult, write_file_action
 
 import data_product_forge_custom_scaffold as pkg
 from data_product_forge_custom_scaffold import (
@@ -34,6 +34,7 @@ from tests.helpers import (
     FIXTURES,
     SECRET,
     ScriptedScaffold,
+    SdkScaffold,
     path_contract,
     reference_bundle,
     reference_contract,
@@ -56,8 +57,7 @@ def _scaffold_files(result: GenerationResult) -> List[GeneratedFile]:
     return [f for f in result.files if f.path != LOCKFILE_NAME]
 
 
-def _one_file() -> List[dict]:
-    return [write_file_action(path="a.txt", content=b"a").to_dict()]
+_ONE_FILE: List[dict] = [write_file_action(path="a.txt", content=b"a").to_dict()]
 
 
 def _reference(tmp_path: Path) -> Dict[str, Any]:
@@ -306,7 +306,7 @@ def test_apply_exception_is_an_apply_error_naming_only_the_exception_type(
     def boom(_):
         raise RuntimeError(SECRET)
 
-    use_scaffold(monkeypatch, ScriptedScaffold(_one_file(), apply=boom))
+    use_scaffold(monkeypatch, ScriptedScaffold(_ONE_FILE, apply=boom))
     bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(ApplyError) as ei:
@@ -333,7 +333,7 @@ def test_failed_files_raise_apply_error_that_lists_paths_not_error_text(
             ],
         )
 
-    use_scaffold(monkeypatch, ScriptedScaffold(_one_file(), apply=failed))
+    use_scaffold(monkeypatch, ScriptedScaffold(_ONE_FILE, apply=failed))
     bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(ApplyError) as ei:
@@ -348,7 +348,7 @@ def test_failed_files_raise_apply_error_that_lists_paths_not_error_text(
 
 def test_a_planned_file_missing_after_apply_is_an_apply_error(tmp_path: Path, monkeypatch) -> None:
     ok = ExecutionResult(plugin="p", role="custom_scaffold", applied=1, failed=0)
-    use_scaffold(monkeypatch, ScriptedScaffold(_one_file(), apply=lambda actions: ok))
+    use_scaffold(monkeypatch, ScriptedScaffold(_ONE_FILE, apply=lambda actions: ok))
     bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(ApplyError, match="'a.txt' was planned but could not be read back"):
@@ -390,14 +390,7 @@ def test_a_python_plugin_scaffold_is_listed_through_its_own_apply(
     tmp_path: Path, monkeypatch
 ) -> None:
     out = tmp_path / "out"
-
-    class _Plugin(CustomScaffold):  # the SDK's default apply() does the writing
-        name = "plug"
-
-        def plan(self, contract):
-            return _one_file()
-
-    use_scaffold(monkeypatch, _Plugin(output_root=out))
+    use_scaffold(monkeypatch, SdkScaffold(_ONE_FILE, output_root=out))
     bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     result = generate(path_contract(bundle, ["p"]), out)

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
+from fluid_sdk import CustomScaffold
 
 from data_product_forge_custom_scaffold.engine import Engine
 
@@ -134,6 +135,19 @@ class ScriptedScaffold:
         if self._apply is None:
             raise AssertionError("apply() must not run for a refused plan")
         return self._apply(actions)
+
+
+class SdkScaffold(CustomScaffold):
+    """A scaffold with a fixed plan whose ``apply()`` is the SDK's own (atomic, path-guarded)."""
+
+    name = "sdk-scaffold"
+
+    def __init__(self, actions: List[dict], *, output_root: Path) -> None:
+        super().__init__(output_root=output_root)
+        self._actions = actions
+
+    def plan(self, contract: Mapping[str, Any]) -> List[dict]:
+        return self._actions
 
 
 def use_scaffold(monkeypatch: Any, scaffold: Any) -> None:

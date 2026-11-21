@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List
 
 import pytest
-from fluid_sdk import CustomScaffold, ExecutionResult, PluginError, write_file_action
+from fluid_sdk import ExecutionResult, PluginError, write_file_action
 
 from data_product_forge_custom_scaffold import Engine
 from data_product_forge_custom_scaffold import errors as errors_mod
@@ -33,6 +33,7 @@ from data_product_forge_custom_scaffold.resolvers import ResolutionError
 from tests.helpers import (
     SECRET,
     ScriptedScaffold,
+    SdkScaffold,
     path_contract,
     reference_bundle,
     reference_contract,
@@ -260,14 +261,9 @@ def test_a_harmless_dot_dot_that_stays_inside_is_still_written(tmp_path: Path, m
     # root); the pre-apply check must not turn that into a new refusal.
     bundle = reference_bundle(tmp_path)
     out = tmp_path / "out"
+    plan = [write_file_action(path="a/../b.txt", content=b"ok").to_dict()]
+    use_scaffold(monkeypatch, SdkScaffold(plan, output_root=out))
 
-    class _Inside(CustomScaffold):
-        name = "inside"
-
-        def plan(self, contract):
-            return [write_file_action(path="a/../b.txt", content=b"ok").to_dict()]
-
-    use_scaffold(monkeypatch, _Inside(output_root=out))
     result = Engine(output_root=out, contract_dir=tmp_path).run(_ref_contract(bundle))
 
     assert result.apply_result is not None and result.apply_result.failed == 0
