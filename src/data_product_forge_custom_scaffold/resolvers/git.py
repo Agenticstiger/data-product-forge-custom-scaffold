@@ -26,11 +26,12 @@ for a credential; where it may go is decided by the operator, outside the contra
 The token never appears on a command line. It is handed to git in the environment as an
 ``http.<url>.extraHeader`` (``GIT_CONFIG_COUNT``, git 2.31 or newer) scoped to the source's
 url, with ``http.followRedirects=false`` so it cannot follow a redirect to another host. git
-records it nowhere in the clone, and it is never logged. The cache key includes the host
-(and port) and the variable name (never the value), so an unauthenticated source cannot
-reuse a private clone. A clone in the cache whose git config carries credentials, made by an
-earlier version, is deleted at the start of every run; the one this run is about to reuse is
-cleaned in place first.
+records it nowhere in the clone, and it is never logged. The cache key includes the host (and
+port) and the variable name (never the value), so an unauthenticated source cannot reuse a
+private clone. A clone that an earlier version made with the token in the url, whose git config
+carries credentials, is deleted at the start of every run, but only one that the engine made:
+inside ``<cache>/git/<16 hex digits>/``, in a directory named for its own url (see
+:func:`_sweep_leftovers`). The one this run is about to reuse is cleaned in place first.
 
 git never prompts on the terminal for a credential (``GIT_TERMINAL_PROMPT=0``
 unless the caller sets it), so a library call cannot hang waiting for input.
@@ -98,6 +99,14 @@ _MIN_GIT = (2, 31)  # GIT_CONFIG_COUNT, which carries the credential without a c
 # replacing or deleting. A leftover that changed less than a day ago may be a live run's.
 _LEFTOVERS = (".partial-", ".old-")
 _LEFTOVER_AGE = 24 * 3600.0
+
+# The names the engine gives what it makes in the git cache, which is all the sweep deletes: a
+# url directory is the first 16 hex digits of a sha256, a leftover is ``.partial-`` or ``.old-``
+# and 16 random hex digits (``secrets.token_hex(8)``). A directory of anyone else's that sits in
+# the same place, such as ``~/git/<org>/<repo>`` when the cache variable points at ``~``, is not
+# named like that, so it is never touched.
+_URL_DIR = re.compile(r"[0-9a-f]{16}")
+_LEFTOVER = re.compile(r"\.(?:partial|old)-[0-9a-f]{16}")
 
 # Allowed URL schemes — any other scheme is rejected outright.
 _ALLOWED_SCHEMES = ("https://", "ssh://", "git@", "git+https://", "git+ssh://")
@@ -288,8 +297,7 @@ class GitResolver(Resolver):
         # without ``auth`` cannot reuse a clone that was fetched with one. A url holds no NUL
         # (``_validated`` refuses it), so the parts cannot be run together into another key.
         seed = url if binding is None else f"{url}\0{binding.endpoint}\0{binding.name}"
-        digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
-        return cache_root() / "git" / digest / _safe_ref(ref)
+        return cache_root() / "git" / _digest(seed) / _safe_ref(ref)
 
     def _clone_into_cache(
         self,
@@ -591,6 +599,11 @@ def _git_version() -> Tuple[int, int]:
     return (int(found.group(1)), int(found.group(2))) if found else (99, 0)
 
 
+def _digest(seed: str) -> str:
+    """The name of a url directory: the first 16 hex digits of the sha256 of its *seed*."""
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+
+
 def _safe_ref(ref: str) -> str:
     """Sanitise a ref name for use as a cache directory name.
 
@@ -717,42 +730,80 @@ def _last_changed(path: Path) -> float:
     return max(stat.st_mtime, stat.st_ctime)
 
 
+def _without_user(url: str) -> str:
+    """*url* with the user part of its authority removed: the url its cache key was made from."""
+    match = _USERINFO.match(url)
+    return f"{match.group(1)}://{url[match.end():]}" if match else url
+
+
+def _made_with_a_token_in_the_url(url_dir: Path, entry: Path) -> bool:
+    """True for a clone that an earlier version of this engine made with a token in its url.
+
+    Such a clone holds credentials in its git config, and its url directory is the digest of
+    that url without them: the key every source had before one with ``auth`` got a key of its
+    own. A clone of anyone else's that holds a credentialed url is not named like that, so it is
+    never taken for one. A link is not a clone.
+    """
+    if _linked(entry) is not None or not entry.is_dir():
+        return False
+    return any(_digest(_without_user(url)) == url_dir.name for url in _stored_credentials(entry))
+
+
+def _sweep_entry(url_dir: Path, path: Path, now: float) -> None:
+    if _LEFTOVER.fullmatch(path.name):
+        if path.is_symlink():
+            path.unlink()  # never followed
+        elif _stored_credentials(path) or now - _last_changed(path) > _LEFTOVER_AGE:
+            shutil.rmtree(path, ignore_errors=True)
+    elif _made_with_a_token_in_the_url(url_dir, path):
+        _discard(path)  # renamed away first: never seen half-deleted
+
+
 def _sweep_leftovers(keep: Optional[Path] = None) -> None:
     """Delete what earlier runs left in the git cache that holds a token or is long dead.
 
-    * A ``.partial-*`` or ``.old-*`` directory (a clone being built, or being replaced or
-      deleted) that a killed run left goes at once if it holds a credential, else when it has
-      not changed for a day, which no live run's directory has not. A link by that name is
+    Only what carries a name the engine gives its own directories is looked at, in
+    ``<cache>/git/<16 hex digits>/`` and nowhere else: a url directory that is not named like
+    that, or is a link, is skipped, and so is the whole sweep when ``<cache>/git`` is a link, to
+    wherever. What is behind a link, or sits where the cache variable happens to point, is not
+    the engine's to delete.
+
+    * A ``.partial-<hex>`` or ``.old-<hex>`` directory (a clone being built, or being replaced
+      or deleted) that a killed run left goes at once if it holds a credential, else when it
+      has not changed for a day, which no live run's directory has not. A link by that name is
       removed, never followed.
-    * Any other cache entry whose git config holds a credential goes at once. Only an earlier
-      version made one (it cloned with the token in the url), under a key a source with
-      ``auth`` no longer reaches, and it must not be served to a source that was not the one
-      it was fetched for. A link, or an entry with a linked ``.git``, is left alone: using it
-      is refused.
+    * A clone that an earlier version made with the token in the url goes at once (see
+      :func:`_made_with_a_token_in_the_url`): it sits under a key a source with ``auth`` no
+      longer reaches, and it must not be served to a source that was not the one it was
+      fetched for. A link, or an entry with a linked ``.git``, is left alone: using it is
+      refused.
 
     The entry in *keep*, the one this run is about to use, is left to
-    :func:`_drop_stored_credentials`. A url directory that is itself a link is skipped whole:
-    what is under it is not the engine's to delete.
+    :func:`_drop_stored_credentials`.
     """
     git_cache = cache_root() / "git"
     try:
-        entries = list(git_cache.glob("*/*"))
+        if git_cache.is_symlink() or not git_cache.is_dir():
+            return
+        url_dirs = [
+            path
+            for path in git_cache.iterdir()
+            if _URL_DIR.fullmatch(path.name) and path.is_dir() and not path.is_symlink()
+        ]
     except OSError:
         return
     now = time.time()
-    for path in entries:
+    for url_dir in url_dirs:
         try:
-            if path == keep or path.parent.is_symlink():
-                continue
-            if not path.name.startswith(_LEFTOVERS):
-                if _linked(path) is None and _stored_credentials(path):
-                    _discard(path)  # renamed away first: never seen half-deleted
-            elif path.is_symlink():
-                path.unlink()
-            elif _stored_credentials(path) or now - _last_changed(path) > _LEFTOVER_AGE:
-                shutil.rmtree(path, ignore_errors=True)
+            entries = list(url_dir.iterdir())
         except OSError:
             continue
+        for path in entries:
+            try:
+                if path != keep:
+                    _sweep_entry(url_dir, path, now)
+            except OSError:
+                continue
 
 
 # The only shape of url a credential is sent to: a plain ASCII host (no userinfo, brackets,

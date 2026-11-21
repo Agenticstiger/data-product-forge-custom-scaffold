@@ -118,8 +118,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   afterwards, is deleted and fetched again. Every other clone in the cache that holds
   credentials (an earlier version made them for sources with `auth`, under a key that is
   no longer used, so nothing would ever have cleaned them) is deleted at the start of every
-  run. A cache entry that is a symbolic link, or whose `.git` or `.git/config` is one, is
-  refused instead of reused or written through.
+  run, but only if the engine made it: it must sit in `<cache>/git/<16 hex digits>/`, and
+  that directory must be named for the digest of the clone's own origin url without the
+  token. The sweep looks at nothing else, so a `FLUID_CUSTOM_SCAFFOLD_CACHE` that points at
+  a wide directory such as `$HOME` costs nothing (`~/git/<org>/<repo>` is not touched), and a
+  `<cache>/git` that is a symbolic link is not swept at all. A cache entry that is a
+  symbolic link, or whose `.git` or `.git/config` is one, is refused instead of reused or
+  written through.
 - **A failed, interrupted or killed fetch no longer leaves a directory for the next run to
   reuse.** A clone is built in a `.partial-*` directory beside its final place and
   renamed into it when it is whole. Before, a commit pin that failed after `git init`, or
@@ -131,9 +136,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fetch the same source at once the second to finish keeps the first's clone (a refresh,
   which was asked for, does replace one). A clone that cannot be renamed aside is left
   whole and the run fails, rather than deleting it in place. A killed run
-  leaves only a `.partial-*` or `.old-*` directory, and the next run of any source sweeps
-  those: at once if one holds a token (a clone from an earlier version), else when it has
-  not changed for a day. A `ref` made of dots (`.` or `..`) can no longer name the url's
+  leaves only a `.partial-*` or `.old-*` directory (that name and 16 hex digits, in a url
+  directory of the cache), and the next run of any source sweeps those: at once if one
+  holds a token (a clone from an earlier version), else when it has not changed for a day. A `ref` made of dots (`.` or `..`) can no longer name the url's
   cache directory or its parent, and one that starts `.partial-` or `.old-` can no longer
   name a directory the sweep would delete.
 - **git and ssh never wait for an answer.** git runs with `GIT_TERMINAL_PROMPT=0` unless

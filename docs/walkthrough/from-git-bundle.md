@@ -108,9 +108,9 @@ The rules, all enforced before git runs:
 
 The token is handed to git in the environment, as an `http.<url>.extraHeader` for that url
 only (git 2.31 or newer), and redirects are refused for the fetch. It is on no command line,
-so `ps` does not show it, and it is not written to the cache or the lock or logged. A cache
-made by an earlier version that still holds a token is deleted the next time any source is
-resolved. The cache entry is keyed by the host, the port and the variable name, so a source
+so `ps` does not show it, and it is not written to the cache or the lock or logged. A clone in the cache that an earlier
+version made with the token in its url is deleted the next time any source is resolved (only
+that: nothing else in the cache directory is touched). The cache entry is keyed by the host, the port and the variable name, so a source
 without `auth` never reuses a private clone.
 
 ### SSH sources
