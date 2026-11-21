@@ -14,7 +14,10 @@ If a change adds runtime opinions about what the user's project looks like, it p
 
 ```
 src/data_product_forge_custom_scaffold/
+├── api.py                 # generate(): the public library entry point (the CLI wraps it)
 ├── engine.py              # Orchestrator: contract -> resolved bundle -> rendered files
+├── errors.py              # EngineError hierarchy (typed errors for engine + library API)
+├── confinement.py         # Output-path confinement between plan and apply (security-sensitive)
 ├── manifest.py            # Parser for fluid-scaffold.yaml
 ├── renderer.py            # Jinja rendering + static/ copying (security-sensitive)
 ├── validation.py          # JSON-Schema for extensions.customScaffold (validator hook)
@@ -57,7 +60,7 @@ dependency line for local development:
 ## Where high-quality PRs come from
 
 - **Tests demonstrate the change.** The renderer has explicit symlink-safety tests and a determinism test — anything that touches those areas needs equivalent coverage.
-- **Security-sensitive code gets an extra hop.** `renderer.py`, `resolvers/git.py`, `resolvers/entrypoint.py`, and `validation.py` all handle external input. Changes here need an explicit "this can't be exploited because…" line in the PR description.
+- **Security-sensitive code gets an extra hop.** `renderer.py`, `confinement.py`, `resolvers/git.py`, `resolvers/entrypoint.py`, and `validation.py` all handle external input. Changes here need an explicit "this can't be exploited because…" line in the PR description.
 - **One logical change per PR.** Conventional Commits format (`feat(resolvers): add pypi resolver`).
 - **Determinism is a contract.** If your change can produce different bytes for the same contract on two runs, that's a bug.
 

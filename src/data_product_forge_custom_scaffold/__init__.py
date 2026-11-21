@@ -2,7 +2,7 @@
 generated project scaffold.
 
 Public objects (the engine is mostly consumed via the FLUID CLI subcommand
-``fluid generate custom-scaffold``; these exports are for programmatic use):
+``fluid custom-scaffold``; these exports are for programmatic use):
 
 * :func:`generate` — the library entry point: ``generate(contract, out_dir)`` writes
   the project and returns every file with its relative path, sha256 and size

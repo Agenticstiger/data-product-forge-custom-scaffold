@@ -20,6 +20,7 @@
 | Doc | What's inside |
 |---|---|
 | [`reference/manifest-format.md`](reference/manifest-format.md) | Complete `fluid-scaffold.yaml` reference — every field, every rendering mode |
+| [`reference/library-api.md`](reference/library-api.md) | `generate()` — call the engine from Python; every written file with its sha256 and size |
 
 ## Related
 
