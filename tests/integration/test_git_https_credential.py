@@ -57,88 +57,97 @@ def _basic(token: str) -> str:
     return base64.b64encode(f"x-access-token:{token}".encode()).decode()
 
 
-class GitServer:
+def _backend_answer(
+    backend: Path, repos: Path, request: BaseHTTPRequestHandler, path: str, query: str
+) -> Tuple[int, List[Tuple[str, str]], bytes]:
+    """Run ``git http-backend`` for *request*; its status, headers and body."""
+    length = int(request.headers.get("Content-Length") or 0)
+    env = {
+        **os.environ,
+        "GIT_PROJECT_ROOT": str(repos),
+        "GIT_HTTP_EXPORT_ALL": "1",
+        "REQUEST_METHOD": request.command,
+        "PATH_INFO": path,
+        "QUERY_STRING": query,
+        "CONTENT_TYPE": request.headers.get("Content-Type", ""),
+        "CONTENT_LENGTH": str(length),
+        "HTTP_CONTENT_ENCODING": request.headers.get("Content-Encoding", ""),
+        "GIT_PROTOCOL": request.headers.get("Git-Protocol", ""),
+        "REMOTE_USER": "x-access-token",
+    }
+    out = subprocess.run(
+        [str(backend)],
+        input=request.rfile.read(length) if length else b"",
+        env=env,
+        capture_output=True,
+    ).stdout
+    head, _, payload = out.partition(b"\r\n\r\n")
+    status, headers = 200, []
+    for line in head.decode("latin-1").split("\r\n"):
+        name, _, value = line.partition(":")
+        if name.lower() == "status":
+            status = int(value.split()[0])
+        elif name:
+            headers.append((name, value.strip()))
+    return status, headers, payload
+
+
+class _Handler(BaseHTTPRequestHandler):
+    server: GitServer  # type: ignore[assignment]
+
+    def log_message(self, *args: object) -> None:  # keep the test output quiet
+        pass
+
+    def _answer(self, status: int, headers: List[Tuple[str, str]], body: bytes) -> None:
+        self.send_response(status)
+        for name, value in headers:
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve(self) -> None:
+        sent = self.headers.get("Authorization")
+        path, _, query = self.path.partition("?")
+        if self.server.redirect and path.endswith("/info/refs"):
+            self.server.requests.append((self.path, sent, 301))
+            moved = self.path.replace("/org/repo.git", "/org/moved.git")
+            return self._answer(301, [("Location", moved)], b"")
+        if sent != f"Basic {_basic(self.server.token)}":
+            self.server.requests.append((self.path, sent, 401))
+            return self._answer(401, [("WWW-Authenticate", 'Basic realm="git"')], b"")
+        self.server.requests.append((self.path, sent, 200))
+        self._answer(*_backend_answer(self.server.backend, self.server.repos, self, path, query))
+
+    def do_GET(self) -> None:  # noqa: N802 (the name http.server calls)
+        self._serve()
+
+    def do_POST(self) -> None:  # noqa: N802
+        self._serve()
+
+
+class GitServer(ThreadingHTTPServer):
     """A TLS git server that demands one token. ``requests`` is (path, Authorization, status)."""
 
     def __init__(self, repos: Path, cert: Path, key: Path, backend: Path) -> None:
+        super().__init__((HOST, 0), _Handler)
+        self.repos, self.backend = repos, backend
         self.token = TOKEN
         self.redirect = False
         self.requests: List[Tuple[str, Optional[str], int]] = []
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args: object) -> None:  # keep the test output quiet
-                pass
-
-            def _answer(self, status: int, headers: List[Tuple[str, str]], body: bytes) -> None:
-                self.send_response(status)
-                for name, value in headers:
-                    self.send_header(name, value)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def _serve(self) -> None:
-                sent = self.headers.get("Authorization")
-                path, _, query = self.path.partition("?")
-                if outer.redirect and path.endswith("/info/refs"):
-                    outer.requests.append((self.path, sent, 301))
-                    moved = self.path.replace("/org/repo.git", "/org/moved.git")
-                    return self._answer(301, [("Location", moved)], b"")
-                if sent != f"Basic {_basic(outer.token)}":
-                    outer.requests.append((self.path, sent, 401))
-                    return self._answer(401, [("WWW-Authenticate", 'Basic realm="git"')], b"")
-                outer.requests.append((self.path, sent, 200))
-                length = int(self.headers.get("Content-Length") or 0)
-                env = {
-                    **os.environ,
-                    "GIT_PROJECT_ROOT": str(repos),
-                    "GIT_HTTP_EXPORT_ALL": "1",
-                    "REQUEST_METHOD": self.command,
-                    "PATH_INFO": path,
-                    "QUERY_STRING": query,
-                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
-                    "CONTENT_LENGTH": str(length),
-                    "HTTP_CONTENT_ENCODING": self.headers.get("Content-Encoding", ""),
-                    "GIT_PROTOCOL": self.headers.get("Git-Protocol", ""),
-                    "REMOTE_USER": "x-access-token",
-                }
-                out = subprocess.run(
-                    [str(backend)],
-                    input=self.rfile.read(length) if length else b"",
-                    env=env,
-                    capture_output=True,
-                ).stdout
-                head, _, payload = out.partition(b"\r\n\r\n")
-                status, headers = 200, []
-                for line in head.decode("latin-1").split("\r\n"):
-                    name, _, value = line.partition(":")
-                    if name.lower() == "status":
-                        status = int(value.split()[0])
-                    elif name:
-                        headers.append((name, value.strip()))
-                self._answer(status, headers, payload)
-
-            def do_GET(self) -> None:  # noqa: N802 (the name http.server calls)
-                self._serve()
-
-            def do_POST(self) -> None:  # noqa: N802
-                self._serve()
-
-        self._httpd = ThreadingHTTPServer((HOST, 0), Handler)
         context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         context.load_cert_chain(cert, key)
-        self._httpd.socket = context.wrap_socket(self._httpd.socket, server_side=True)
-        self.port = self._httpd.server_address[1]
+        self.socket = context.wrap_socket(self.socket, server_side=True)
+        self.port = self.server_address[1]
         self.url = f"https://{HOST}:{self.port}/org/repo.git"
         self._thread = threading.Thread(
-            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+            target=self.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
         )
         self._thread.start()
 
     def close(self) -> None:
-        self._httpd.shutdown()
-        self._httpd.server_close()
+        self.shutdown()
+        self.server_close()
         self._thread.join(timeout=5)
 
 

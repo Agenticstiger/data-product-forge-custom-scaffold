@@ -193,3 +193,16 @@ def patch_run(monkeypatch: Any, module: Any, respond: Callable[[Any, Dict[str, A
 
 def completed(args: Any, stdout: str = "") -> "subprocess.CompletedProcess[str]":
     return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+
+def git_that_fails(
+    url: str, stderr: str, *, returncode: int = 1
+) -> Callable[[Any, Dict[str, Any]], Any]:
+    """A ``patch_run`` answer: git's url probe is told *url*, every other command fails with *stderr*."""
+
+    def respond(args: Any, kwargs: Dict[str, Any]) -> Any:
+        if args[1:3] == ["ls-remote", "--get-url"]:
+            return completed(args, url + "\n")
+        raise subprocess.CalledProcessError(returncode, args, stderr=stderr)
+
+    return respond

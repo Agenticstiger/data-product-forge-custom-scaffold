@@ -18,7 +18,7 @@ import pytest
 from data_product_forge_custom_scaffold.resolvers import git as git_resolver
 from data_product_forge_custom_scaffold.resolvers.base import ResolutionError
 from data_product_forge_custom_scaffold.resolvers.git import GitResolver, _scrub_origin
-from tests.helpers import completed, patch_run
+from tests.helpers import completed, git_that_fails, patch_run
 
 TOKEN = "s3cret-token-value"
 PLAIN_URL = "https://example.com/org/repo"
@@ -221,14 +221,8 @@ def test_an_error_does_not_keep_the_failed_command_or_the_credential(monkeypatch
     credential = git_resolver._Credential(url=PLAIN_URL, name="FLUID_SCAFFOLD_T", token=TOKEN)
     basic = credential._basic
 
-    def fail(args, **kwargs):
-        if args[1:3] == ["ls-remote", "--get-url"]:  # git is asked how it will use the url
-            return subprocess.CompletedProcess(args, 0, stdout=PLAIN_URL + "\n", stderr="")
-        raise subprocess.CalledProcessError(
-            1, args, stderr=f"fatal: bad header {basic} for {TOKEN} at '{PLAIN_URL}'"
-        )
-
-    monkeypatch.setattr(git_resolver.subprocess, "run", fail)
+    stderr = f"fatal: bad header {basic} for {TOKEN} at '{PLAIN_URL}'"
+    patch_run(monkeypatch, git_resolver, git_that_fails(PLAIN_URL, stderr))
 
     with pytest.raises(ResolutionError) as raised:
         GitResolver._git(["fetch", PLAIN_URL], url=PLAIN_URL, what="fetch", credential=credential)

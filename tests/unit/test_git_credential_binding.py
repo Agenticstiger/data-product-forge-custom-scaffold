@@ -8,7 +8,6 @@ settings (the process environment) do. These tests pin that, and the rules aroun
 from __future__ import annotations
 
 import hashlib
-import subprocess
 from typing import Any, List
 
 import pytest
@@ -22,7 +21,7 @@ from data_product_forge_custom_scaffold.resolvers.git import (
     _Credential,
     _sanitise_url,
 )
-from tests.helpers import completed, git_source, patch_run
+from tests.helpers import git_source, git_that_fails, patch_run
 
 URL = "https://github.com/org/bundle"
 SECRET = "ghp_VERYSECRETVALUE"
@@ -441,16 +440,8 @@ def test_a_failed_credentialed_fetch_says_what_to_check(detail: str, expected: s
 def test_the_hint_reaches_the_error_a_caller_sees(monkeypatch) -> None:
     credential = _Credential(url=URL, name="FLUID_SCAFFOLD_TOKEN", token=SECRET)
 
-    def fail(args, kwargs):
-        if args[1:3] == ["ls-remote", "--get-url"]:
-            return completed(args, URL + "\n")
-        raise subprocess.CalledProcessError(
-            128,
-            args,
-            stderr=f"fatal: could not read Username for '{URL}': terminal prompts disabled",
-        )
-
-    patch_run(monkeypatch, git_resolver, fail)
+    refused = f"fatal: could not read Username for '{URL}': terminal prompts disabled"
+    patch_run(monkeypatch, git_resolver, git_that_fails(URL, refused, returncode=128))
 
     with pytest.raises(
         ResolutionError, match="did not accept the credential from FLUID_SCAFFOLD_TOKEN"
