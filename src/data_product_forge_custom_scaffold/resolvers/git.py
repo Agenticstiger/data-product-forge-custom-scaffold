@@ -28,8 +28,9 @@ The token never appears on a command line. It is handed to git in the environmen
 url, with ``http.followRedirects=false`` so it cannot follow a redirect to another host. git
 records it nowhere in the clone, and it is never logged. The cache key includes the host
 (and port) and the variable name (never the value), so an unauthenticated source cannot
-reuse a private clone. A cached clone that carries credentials, made by an earlier version, is cleaned before
-it is reused.
+reuse a private clone. A clone in the cache whose git config carries credentials, made by an
+earlier version, is deleted at the start of every run; the one this run is about to reuse is
+cleaned in place first.
 
 git never prompts on the terminal for a credential (``GIT_TERMINAL_PROMPT=0``
 unless the caller sets it), so a library call cannot hang waiting for input.
@@ -56,10 +57,12 @@ force a re-fetch, delete the cache dir or set
 
 A clone is built in a ``.partial-*`` directory beside its final place and renamed into it
 when it is whole, so a directory under ``<urlhash>/<ref>`` is a finished clone even if the
-run is killed outright (one made by an earlier version excepted). A killed run leaves only
-the ``.partial-*`` directory, which holds no token and can be deleted. A refresh renames the
-old clone aside and deletes it once the new one is in place; a first run never removes a
-clone that another run published while it was fetching.
+run is killed outright (one made by an earlier version excepted). A killed run leaves a
+``.partial-*`` directory (a clone being built) or an ``.old-*`` one (a clone being replaced
+or deleted). Neither is read as a cache entry, and every run deletes those left for more than
+a day, and at once any that holds a token. A refresh renames the old clone aside and deletes
+it once the new one is in place; a first run never removes a clone that another run
+published while it was fetching.
 
 Shells out to the ``git`` binary — no Python gitpython dependency.
 """
@@ -91,8 +94,10 @@ _SECRET_PREFIXES = "FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES"  # variable-name pref
 _DEFAULT_SECRET_PREFIX = "FLUID_SCAFFOLD_"
 _MIN_GIT = (2, 31)  # GIT_CONFIG_COUNT, which carries the credential without a command line
 
-# A leftover of a killed run younger than this may be a live run's staging directory.
-_LEFTOVER_AGE = 3600.0
+# What a killed run leaves beside a clone: the directory it was building, and the one it was
+# replacing or deleting. A leftover that changed less than a day ago may be a live run's.
+_LEFTOVERS = (".partial-", ".old-")
+_LEFTOVER_AGE = 24 * 3600.0
 
 # Allowed URL schemes — any other scheme is rejected outright.
 _ALLOWED_SCHEMES = ("https://", "ssh://", "git@", "git+https://", "git+ssh://")
@@ -242,8 +247,8 @@ class GitResolver(Resolver):
         del contract_dir
         url, ref, subdir, binding = _validated(source)
 
-        _sweep_leftovers()
         cache_dir = self._cache_dir_for(url, ref, binding)
+        _sweep_leftovers(keep=cache_dir)
         refetch = bool(os.environ.get(_NOCACHE))
         if os.path.lexists(cache_dir):
             _refuse_symlinks(cache_dir)
@@ -589,10 +594,13 @@ def _safe_ref(ref: str) -> str:
 
     Dots stay (``v1.2.0``), but a name made only of dots (``.``, ``..``) would name the
     url's directory or its parent instead of a directory inside it, so it becomes
-    underscores.
+    underscores. A name that starts like a leftover of a killed run (``.partial-``,
+    ``.old-``) gets an underscore in front, so a clone never sits where the sweep deletes.
     """
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in ref)
-    return safe if safe.strip(".") else "_" * max(len(safe), 1)
+    if not safe.strip("."):
+        return "_" * max(len(safe), 1)
+    return f"_{safe}" if safe.startswith(_LEFTOVERS) else safe
 
 
 def _publish(staging: Path, cache_dir: Path, *, replace: bool) -> None:
@@ -680,38 +688,65 @@ def _scrub_origin(git_dir: str, tainted_url: str, url: str) -> None:
     )
 
 
+def _linked(cache_dir: Path) -> Optional[Path]:
+    """The first of a cache entry, its ``.git`` and its ``.git/config`` that is a link."""
+    candidates = (cache_dir, cache_dir / ".git", cache_dir / ".git" / "config")
+    return next((path for path in candidates if path.is_symlink()), None)
+
+
 def _refuse_symlinks(cache_dir: Path) -> None:
     """A cache entry is never a symbolic link, nor is its ``.git`` or ``.git/config``.
 
     ``git remote set-url`` would write through a linked config, and a linked directory would
     be reused as if it were ours; the engine follows no link in its own cache.
     """
-    for path in (cache_dir, cache_dir / ".git", cache_dir / ".git" / "config"):
-        if path.is_symlink():
-            raise ResolutionError(
-                f"cache entry {path} is a symbolic link; remove it (the engine does not "
-                f"follow links in its cache)"
-            )
+    link = _linked(cache_dir)
+    if link is not None:
+        raise ResolutionError(
+            f"cache entry {link} is a symbolic link; remove it (the engine does not "
+            f"follow links in its cache)"
+        )
 
 
-def _sweep_leftovers() -> None:
-    """Delete the ``.partial-*`` and ``.old-*`` directories that a killed run left behind.
+def _last_changed(path: Path) -> float:
+    """When *path* last changed. A rename updates ``ctime`` and not ``mtime``, so a clone that
+    was only just renamed to ``.old-*`` is not taken for an old one."""
+    stat = path.stat()
+    return max(stat.st_mtime, stat.st_ctime)
 
-    One that holds a credential (a clone from an earlier version that was being deleted) goes
-    at once. The others go when they are older than an hour, which no live run's staging
-    directory is. A link is removed, never followed.
+
+def _sweep_leftovers(keep: Optional[Path] = None) -> None:
+    """Delete what earlier runs left in the git cache that holds a token or is long dead.
+
+    * A ``.partial-*`` or ``.old-*`` directory (a clone being built, or being replaced or
+      deleted) that a killed run left goes at once if it holds a credential, else when it has
+      not changed for a day, which no live run's directory has not. A link by that name is
+      removed, never followed.
+    * Any other cache entry whose git config holds a credential goes at once. Only an earlier
+      version made one (it cloned with the token in the url), under a key a source with
+      ``auth`` no longer reaches, and it must not be served to a source that was not the one
+      it was fetched for. A link, or an entry with a linked ``.git``, is left alone: using it
+      is refused.
+
+    The entry in *keep*, the one this run is about to use, is left to
+    :func:`_drop_stored_credentials`.
     """
     git_cache = cache_root() / "git"
     try:
-        leftovers = [*git_cache.glob("*/.partial-*"), *git_cache.glob("*/.old-*")]
+        entries = list(git_cache.glob("*/*"))
     except OSError:
         return
     now = time.time()
-    for path in leftovers:
+    for path in entries:
         try:
-            if path.is_symlink():
+            if path == keep:
+                continue
+            if not path.name.startswith(_LEFTOVERS):
+                if _linked(path) is None and _stored_credentials(path):
+                    _discard(path)  # renamed away first: never seen half-deleted
+            elif path.is_symlink():
                 path.unlink()
-            elif now - path.stat().st_mtime > _LEFTOVER_AGE or _stored_credentials(path):
+            elif _stored_credentials(path) or now - _last_changed(path) > _LEFTOVER_AGE:
                 shutil.rmtree(path, ignore_errors=True)
         except OSError:
             continue

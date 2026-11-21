@@ -144,6 +144,10 @@ def test_a_failed_run_does_not_poison_the_cache_for_the_next_one(_cache):
         ("feature/x", "feature_x"),
         ("..a", "..a"),
         ("a..", "a.."),
+        # The sweep deletes what starts like a killed run's leftover: no ref may name one.
+        (".partial-x", "_.partial-x"),
+        (".old-x", "_.old-x"),
+        ("a.old-x", "a.old-x"),
     ],
 )
 def test_a_ref_never_names_a_directory_outside_its_own_url(ref, directory):
