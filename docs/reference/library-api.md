@@ -171,14 +171,14 @@ Everything the engine attributes to a contract, a bundle, a plugin or the output
 `ResolutionError`, `ManifestError` and `RenderError` keep their old import paths and
 their old bases; they are now also `EngineError`s.
 
-**Redaction.** A failure while a pattern's `plan()` or `apply()` runs is reported by
-exception *type* only, because an arbitrary exception's text can carry a credential —
-and a template can interpolate contract values into one. That includes a failed template
-render: it is a `PlanError` with the `RenderError` chained as `__cause__`. The SDK's
-user-actionable `PluginError` and `UnsafePathError` keep their message. Errors raised
-outside `plan()`/`apply()` (resolving a bundle, parsing a manifest) are engine-authored
-and keep theirs. `ApplyError` for failed files lists the failed paths, not the per-action
-error text.
+**Redaction.** A failure while a pattern's plugin class is constructed, or its `plan()`
+or `apply()` runs, is reported by exception *type* only, because an arbitrary
+exception's text can carry a credential — and a template can interpolate contract values
+into one. That includes a failed template render: it is a `PlanError` with the
+`RenderError` chained as `__cause__`. The SDK's user-actionable `PluginError` and
+`UnsafePathError` keep their message. Errors raised while resolving a bundle or parsing
+a manifest are engine-authored and keep theirs. `ApplyError` for failed files lists the
+failed paths, not the per-action error text.
 
 **Inputs that are not validated.** `generate()` does not validate what it is given
 beyond `contract` being a mapping and the filters not being a bare string. A malformed
@@ -200,8 +200,9 @@ except ApplyError as exc:
                 ...
 ```
 
-**After a failure.** Files that earlier patterns already wrote stay in `out_dir`, no
-lock is written, and an `ApplyError` raised by `apply()` carries no run — so a host that
+**After a failure.** Files that earlier patterns already wrote stay in `out_dir`. The
+lock is written unless `plan()` or `apply()` raised, so it is still there when `apply()`
+*reported* failed files. An `ApplyError` raised by `apply()` carries no run. A host that
 records files should record them only from a successful `generate()` and discard the
 directory otherwise.
 

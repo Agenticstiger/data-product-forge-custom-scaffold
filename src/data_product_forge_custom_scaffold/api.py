@@ -159,12 +159,13 @@ def generate(
 
     The engine's own errors derive from
     :class:`~data_product_forge_custom_scaffold.errors.EngineError`. A failure while
-    a pattern's ``plan()`` or ``apply()`` runs is reported by exception type only (the
-    SDK's ``PluginError`` and :class:`UnsafePathError` keep their message). Inputs the
-    function does not validate (a corrupt lock file with ``pin=True``, an ``out_dir``
-    the operating system cannot resolve) raise the underlying exception. When a run
-    fails, files that earlier patterns already wrote stay in *out_dir* and no lock is
-    written: discard a failed output directory.
+    a pattern's plugin class is constructed, or its ``plan()`` or ``apply()`` runs, is
+    reported by exception type only (the SDK's ``PluginError`` and
+    :class:`UnsafePathError` keep their message). Inputs the function does not
+    validate (a corrupt lock file with ``pin=True``, an ``out_dir`` the operating
+    system cannot resolve) raise the underlying exception. When a run fails, files
+    that earlier patterns already wrote stay in *out_dir*, and the lock is written
+    unless ``plan()`` or ``apply()`` raised: discard a failed output directory.
     """
     if not isinstance(contract, Mapping):
         raise TypeError(f"contract must be a mapping, got {type(contract).__name__}")

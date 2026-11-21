@@ -15,14 +15,14 @@ needs one ``except EngineError`` and can still branch on the subclass:
 * :class:`OutputError` — the run finished, but a file it planned cannot be described
   (``generate()`` only; ``fluid custom-scaffold`` does not need the description).
 
-A failure while a pattern's ``plan()`` or ``apply()`` runs carries the exception
-*type* only, because an arbitrary exception's text can hold a credential — and a
-template can interpolate contract values into one. That includes a failed template
-render: it surfaces as :class:`PlanError` with the ``RenderError`` chained as
-``__cause__``. The exceptions are the SDK's user-actionable ``PluginError`` and
-:class:`UnsafePathError`, which name the offending path. Errors raised outside
-``plan()``/``apply()`` (resolving a bundle, parsing its manifest) are engine-authored
-and keep their message. The original exception is always chained as ``__cause__``.
+A failure while a pattern's plugin class is constructed, or its ``plan()`` or
+``apply()`` runs, carries the exception *type* only, because an arbitrary exception's
+text can hold a credential — and a template can interpolate contract values into one.
+That includes a failed template render: it surfaces as :class:`PlanError` with the
+``RenderError`` chained as ``__cause__``. The exceptions are the SDK's user-actionable
+``PluginError`` and :class:`UnsafePathError`, which name the offending path. Errors
+raised while resolving a bundle or parsing its manifest are engine-authored and keep
+their message. The original exception is always chained as ``__cause__``.
 
 The shape (one base class, a distinct subclass for an unsafe destination path)
 follows copier's ``CopierError`` / ``ForbiddenPathError`` and CPython's
