@@ -1,8 +1,9 @@
-"""git subprocess hardening: never prompt for a credential, never keep the token.
+"""git subprocess hardening: never prompt for a credential, never leave half a clone.
 
-A library call in a non-interactive job must not hang on a credential prompt, and a
-token injected into a clone URL must not stay in the cache's ``.git/config`` (git
-records the URL a clone was given as the remote).
+A library call in a non-interactive job must not hang on a credential prompt, and a fetch
+that fails or is interrupted must not leave a directory the next run takes for a clone.
+(Where a token may be written is covered by ``test_git_token_flow.py`` and
+``test_git_cached_credentials.py``.)
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import pytest
 
 from data_product_forge_custom_scaffold.resolvers import git as git_resolver
 from data_product_forge_custom_scaffold.resolvers.base import ResolutionError
-from data_product_forge_custom_scaffold.resolvers.git import GitResolver
+from data_product_forge_custom_scaffold.resolvers.git import GitResolver, _scrub_origin
 
 TOKEN = "s3cret-token-value"
 PLAIN_URL = "https://example.com/org/repo"
@@ -56,56 +57,172 @@ def test_an_explicit_prompt_setting_is_respected(monkeypatch) -> None:
     assert seen[0]["env"]["GIT_TERMINAL_PROMPT"] == "1"
 
 
-def _recording_git(monkeypatch, cache: Path, *, fail_on: str = "") -> List[List[str]]:
-    """Stub GitResolver._git: record the arguments and create the clone directory."""
+def test_a_source_with_no_token_is_cloned_and_nothing_else(monkeypatch, tmp_path: Path) -> None:
     calls: List[List[str]] = []
 
     def fake_git(args, *, clone_url, url, what):
         calls.append(list(args))
-        if args[0] == "clone":
-            cache.mkdir(parents=True)
-        if fail_on and fail_on in args:
-            raise ResolutionError("git failed")
+        Path(args[-1]).mkdir(parents=True)  # `git clone` creates the directory it clones into
 
     monkeypatch.setattr(GitResolver, "_git", staticmethod(fake_git))
-    return calls
+
+    GitResolver()._clone_into_cache(PLAIN_URL, "v1", tmp_path / "clone", {})
+
+    assert [call[0] for call in calls] == ["clone"]
+    assert (tmp_path / "clone").is_dir()  # published under its own name
 
 
-def test_a_branch_clone_with_a_token_resets_the_remote_to_the_plain_url(
+def _git_that_makes_its_directory_then(monkeypatch, failure: BaseException) -> None:
+    """Stub GitResolver._git: create the directory git would create, then fail."""
+
+    def stops(args, *, clone_url, url, what):
+        if args[0] in ("clone", "init"):
+            Path(args[-1]).mkdir(parents=True, exist_ok=True)
+        raise failure
+
+    monkeypatch.setattr(GitResolver, "_git", staticmethod(stops))
+
+
+@pytest.mark.parametrize("failure", [ResolutionError("git failed"), KeyboardInterrupt()])
+@pytest.mark.parametrize("ref", ["v1", "a" * 40])
+def test_a_clone_that_stops_part_way_leaves_nothing_behind(
+    monkeypatch, tmp_path: Path, ref: str, failure: BaseException
+) -> None:
+    cache = tmp_path / "cache" / "clone"
+    _git_that_makes_its_directory_then(monkeypatch, failure)
+
+    with pytest.raises(type(failure)):
+        GitResolver()._clone_into_cache(PLAIN_URL, ref, cache, {})
+
+    assert list(cache.parent.iterdir()) == []  # neither the cache directory nor a staging one
+
+
+def test_a_run_killed_outright_never_leaves_a_directory_that_looks_finished(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("DPF_TEST_TOKEN", TOKEN)
+    # A kill gives the process no chance to clean up: simulate that by making the cleanup
+    # a no-op. The half-made clone is in a staging directory, not at the cache path.
     cache = tmp_path / "cache" / "clone"
-    calls = _recording_git(monkeypatch, cache)
+    _git_that_makes_its_directory_then(monkeypatch, KeyboardInterrupt())
 
-    GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {"secret_ref": "DPF_TEST_TOKEN"})
-
-    assert calls[0][:5] == ["clone", "--depth", "1", "--branch", "v1"]
-    assert TOKEN in calls[0][5]  # the clone itself needs it
-    assert calls[1] == ["-C", str(cache), "remote", "set-url", "origin", PLAIN_URL]
-    assert TOKEN not in " ".join(calls[1])
-
-
-def test_a_clone_without_a_token_is_not_rewritten(monkeypatch, tmp_path: Path) -> None:
-    cache = tmp_path / "cache" / "clone"
-    calls = _recording_git(monkeypatch, cache)
-
-    GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {})
-
-    assert [c[0] for c in calls] == ["clone"]
-
-
-def test_a_failed_scrub_deletes_the_clone_instead_of_keeping_the_token(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("DPF_TEST_TOKEN", TOKEN)
-    cache = tmp_path / "cache" / "clone"
-    _recording_git(monkeypatch, cache, fail_on="set-url")
-
-    with pytest.raises(ResolutionError):
-        GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {"secret_ref": "DPF_TEST_TOKEN"})
+    with monkeypatch.context() as no_cleanup:
+        no_cleanup.setattr(git_resolver.shutil, "rmtree", lambda *args, **kwargs: None)
+        with pytest.raises(KeyboardInterrupt):
+            GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {})
 
     assert not cache.exists()
+    assert [p.name for p in cache.parent.iterdir() if p.name.startswith(".partial-")]
+
+
+def test_a_refresh_that_fails_keeps_the_clone_it_was_to_replace(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cache = tmp_path / "cache" / "clone"
+    cache.mkdir(parents=True)
+    (cache / "keep").write_text("the old clone")
+    _git_that_makes_its_directory_then(monkeypatch, ResolutionError("git failed"))
+
+    with pytest.raises(ResolutionError):
+        GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {})
+
+    assert (cache / "keep").read_text() == "the old clone"
+
+
+def test_a_missing_token_is_reported_before_anything_is_deleted(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cache = tmp_path / "cache" / "clone"
+    cache.mkdir(parents=True)
+    (cache / "keep").write_text("the old clone")
+    monkeypatch.delenv("DPF_NO_SUCH_TOKEN", raising=False)
+
+    with pytest.raises(ResolutionError, match="unset"):
+        GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {"secret_ref": "DPF_NO_SUCH_TOKEN"})
+
+    assert (cache / "keep").read_text() == "the old clone"
+
+
+def test_a_refresh_replaces_the_older_clone_and_leaves_nothing_else(tmp_path: Path) -> None:
+    cache = tmp_path / "cache" / "clone"
+    cache.mkdir(parents=True)
+    (cache / "old").write_text("old")
+    staging = tmp_path / "cache" / ".partial-x"
+    staging.mkdir()
+    (staging / "new").write_text("new")
+
+    git_resolver._publish(staging, cache, replace=True)
+
+    assert sorted(p.name for p in cache.iterdir()) == ["new"]
+    assert [p.name for p in cache.parent.iterdir()] == ["clone"]
+
+
+def test_a_first_run_never_removes_a_clone_another_run_published(tmp_path: Path) -> None:
+    # The other run may be reading it right now: keep theirs, drop ours.
+    cache = tmp_path / "cache" / "clone"
+    cache.mkdir(parents=True)
+    (cache / "theirs").write_text("theirs")
+    staging = tmp_path / "cache" / ".partial-x"
+    staging.mkdir()
+    (staging / "mine").write_text("mine")
+
+    git_resolver._publish(staging, cache, replace=False)
+
+    assert [p.name for p in cache.iterdir()] == ["theirs"]
+    assert [p.name for p in cache.parent.iterdir()] == ["clone"]
+
+
+def test_when_another_run_publishes_first_theirs_is_kept(monkeypatch, tmp_path: Path) -> None:
+    cache = tmp_path / "cache" / "clone"
+    cache.parent.mkdir()
+    staging = cache.parent / ".partial-x"
+    staging.mkdir()
+    (staging / "mine").write_text("mine")
+
+    def lose_the_race(src, dst):
+        Path(dst).mkdir()
+        (Path(dst) / "theirs").write_text("theirs")
+        raise OSError("directory not empty")
+
+    monkeypatch.setattr(git_resolver.os, "replace", lose_the_race)
+
+    git_resolver._publish(staging, cache, replace=False)  # no error: a finished clone is in place
+
+    assert [p.name for p in cache.iterdir()] == ["theirs"]
+    assert not staging.exists()
+
+
+def test_a_publish_that_fails_for_another_reason_is_an_error(monkeypatch, tmp_path: Path) -> None:
+    cache = tmp_path / "cache" / "clone"
+    cache.parent.mkdir()
+    staging = cache.parent / ".partial-x"
+    staging.mkdir()
+
+    def fail(src, dst):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(git_resolver.os, "replace", fail)
+
+    with pytest.raises(OSError, match="permission denied"):
+        git_resolver._publish(staging, cache, replace=False)
+
+
+def test_an_error_does_not_keep_the_failed_command_with_its_token(monkeypatch) -> None:
+    # The CalledProcessError's argument list holds the token URL. The new error is raised
+    # outside its handler, so it is not chained as __context__ for a reporter to find.
+    token_url = f"https://x-access-token:{TOKEN}@example.com/org/repo"
+
+    def fail(args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, args, stderr=f"fatal: unable to access '{token_url}'"
+        )
+
+    monkeypatch.setattr(git_resolver.subprocess, "run", fail)
+
+    with pytest.raises(ResolutionError) as raised:
+        GitResolver._git(["fetch", token_url], clone_url=token_url, url=PLAIN_URL, what="fetch")
+
+    assert TOKEN not in str(raised.value)
+    assert raised.value.__context__ is None and raised.value.__cause__ is None
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git binary not on PATH")
@@ -116,8 +233,130 @@ def test_scrub_removes_the_token_from_a_real_repository_config(tmp_path: Path) -
     subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", token_url], check=True)
     assert TOKEN in (repo / ".git" / "config").read_text()  # what a token clone leaves behind
 
-    GitResolver()._scrub_token(repo, token_url, PLAIN_URL)
+    _scrub_origin(str(repo / ".git"), token_url, PLAIN_URL)
 
     config = (repo / ".git" / "config").read_text()
     assert TOKEN not in config
     assert PLAIN_URL in config
+
+
+def _interrupt_when_deleting_the_old_clone(monkeypatch) -> None:
+    real_rmtree = git_resolver.shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path).name.startswith(".old-"):
+            raise KeyboardInterrupt
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(git_resolver.shutil, "rmtree", rmtree)
+
+
+def test_a_directory_is_never_left_half_deleted(monkeypatch, tmp_path: Path) -> None:
+    # A kill or Ctrl-C while the files go: the directory is already renamed away, so the
+    # path is absent, not a damaged clone that a later run would reuse.
+    clone = tmp_path / "cache" / "clone"
+    (clone / ".git").mkdir(parents=True)
+    _interrupt_when_deleting_the_old_clone(monkeypatch)
+
+    with pytest.raises(KeyboardInterrupt):
+        git_resolver._discard(clone)
+
+    assert not clone.exists()
+    assert [p.name.startswith(".old-") for p in clone.parent.iterdir()] == [True]
+
+
+def test_a_refresh_interrupted_while_the_old_clone_goes_keeps_the_new_one(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cache = tmp_path / "cache" / "clone"
+    cache.mkdir(parents=True)
+    (cache / "old").write_text("old")
+    staging = cache.parent / ".partial-x"
+    staging.mkdir()
+    (staging / "new").write_text("new")
+    _interrupt_when_deleting_the_old_clone(monkeypatch)
+
+    with pytest.raises(KeyboardInterrupt):
+        git_resolver._publish(staging, cache, replace=True)
+
+    assert [p.name for p in cache.iterdir()] == ["new"]  # whole, and the new one
+
+
+def test_a_refresh_that_cannot_publish_puts_the_older_clone_back(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cache = tmp_path / "cache" / "clone"
+    cache.mkdir(parents=True)
+    (cache / "old").write_text("old")
+    staging = cache.parent / ".partial-x"
+    staging.mkdir()
+    real_replace = git_resolver.os.replace
+
+    def replace(src, dst):
+        if Path(src) == staging:
+            raise OSError("no space left")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(git_resolver.os, "replace", replace)
+
+    with pytest.raises(OSError, match="no space"):
+        git_resolver._publish(staging, cache, replace=True)
+
+    assert [p.name for p in cache.iterdir()] == ["old"]
+
+
+@pytest.mark.parametrize("ref", ["main:refs/heads/other", "a:b", ":"])
+def test_a_ref_with_a_colon_is_refused_before_any_git_command(monkeypatch, ref: str) -> None:
+    # git ref names cannot contain ":"; with a token it would have become a refspec.
+    monkeypatch.setattr(GitResolver, "_git", staticmethod(lambda *a, **k: 1 / 0))
+
+    with pytest.raises(ResolutionError, match="not a valid git ref name"):
+        GitResolver().resolve({"kind": "git", "url": PLAIN_URL, "ref": ref})
+
+
+def test_discard_says_what_is_left(monkeypatch, tmp_path: Path) -> None:
+    gone = tmp_path / "gone"
+    (gone / ".git").mkdir(parents=True)
+    assert git_resolver._discard(gone) is None and not gone.exists()
+
+    stuck = tmp_path / "stuck"
+    (stuck / ".git").mkdir(parents=True)
+    monkeypatch.setattr(git_resolver.shutil, "rmtree", lambda *args, **kwargs: None)
+    left = git_resolver._discard(stuck)  # renamed aside, but its files remain
+    assert left is not None and left.name.startswith(".old-") and left.is_dir()
+    assert not stuck.exists()
+
+
+def test_a_directory_that_cannot_be_renamed_is_left_whole(monkeypatch, tmp_path: Path) -> None:
+    clone = tmp_path / "clone"
+    (clone / ".git").mkdir(parents=True)
+    (clone / ".git" / "config").write_text("kept")
+
+    def cannot(src, dst):
+        raise OSError("operation not permitted")
+
+    monkeypatch.setattr(git_resolver.os, "replace", cannot)
+
+    assert git_resolver._discard(clone) == clone  # it is still where it was
+    assert (clone / ".git" / "config").read_text() == "kept"  # not deleted in place
+
+
+def test_a_refresh_races_another_refresh_for_the_old_clone(monkeypatch, tmp_path: Path) -> None:
+    cache = tmp_path / "cache" / "clone"
+    cache.mkdir(parents=True)
+    staging = cache.parent / ".partial-x"
+    staging.mkdir()
+    (staging / "new").write_text("new")
+    real_replace = git_resolver.os.replace
+
+    def another_refresh_moved_it_first(src, dst):
+        if Path(src) == cache:
+            shutil_rmtree(cache)  # gone before this run can rename it
+        return real_replace(src, dst)
+
+    shutil_rmtree = shutil.rmtree
+    monkeypatch.setattr(git_resolver.os, "replace", another_refresh_moved_it_first)
+
+    git_resolver._publish(staging, cache, replace=True)  # no error
+
+    assert [p.name for p in cache.iterdir()] == ["new"]

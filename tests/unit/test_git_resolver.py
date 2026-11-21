@@ -16,7 +16,11 @@ import pytest
 
 from data_product_forge_custom_scaffold.resolvers import git as git_resolver
 from data_product_forge_custom_scaffold.resolvers.base import ResolutionError
-from data_product_forge_custom_scaffold.resolvers.git import GitResolver, _looks_like_full_sha
+from data_product_forge_custom_scaffold.resolvers.git import (
+    GitResolver,
+    _looks_like_full_sha,
+    _safe_ref,
+)
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not on PATH")
 
@@ -114,3 +118,79 @@ def test_unknown_sha_raises_cleanly(_cache):
     missing = "0" * 40
     with pytest.raises(ResolutionError):
         GitResolver().resolve({"kind": "git", "url": info["url"], "ref": missing})
+
+
+def test_a_failed_run_does_not_poison_the_cache_for_the_next_one(_cache):
+    # `git init` has already made the cache directory when the fetch fails. The next run must
+    # not find that empty repository and take it for a finished clone.
+    info = _make_upstream(_cache)
+    (_cache / "upstream").rename(_cache / "elsewhere")  # the URL points at nothing (yet)
+    source = {"kind": "git", "url": info["url"], "ref": info["sha_c2"]}
+    with pytest.raises(ResolutionError):
+        GitResolver().resolve(source)
+    assert not GitResolver._cache_dir_for(info["url"], info["sha_c2"]).exists()
+
+    (_cache / "elsewhere").rename(_cache / "upstream")  # it is there now
+    assert (GitResolver().resolve(source).bundle_root / MANIFEST).is_file()
+
+
+@pytest.mark.parametrize(
+    ("ref", "directory"),
+    [
+        (".", "_"),
+        ("..", "__"),
+        ("...", "___"),
+        ("v1.2.0", "v1.2.0"),
+        ("feature/x", "feature_x"),
+        ("..a", "..a"),
+        ("a..", "a.."),
+    ],
+)
+def test_a_ref_never_names_a_directory_outside_its_own_url(ref, directory):
+    # `.` and `..` would name the url's directory or its parent, the whole git cache.
+    assert _safe_ref(ref) == directory
+    assert GitResolver._cache_dir_for("https://example.invalid/x", ref).parent == (
+        GitResolver._cache_dir_for("https://example.invalid/x", "v1").parent
+    )
+
+
+def test_a_ref_made_of_dots_leaves_other_cached_sources_alone(_cache):
+    info = _make_upstream(_cache)
+    other = _cache / "cache" / "git" / "another-url-hash" / "main"
+    other.mkdir(parents=True)
+    (other / "keep").write_text("another source's clone")
+
+    for ref in (".", "..", "..."):
+        with pytest.raises(ResolutionError):
+            GitResolver().resolve({"kind": "git", "url": info["url"], "ref": ref})
+
+    assert (other / "keep").is_file()
+
+
+def test_a_refresh_that_fails_keeps_the_clone_it_was_to_replace(_cache, monkeypatch):
+    info = _make_upstream(_cache)
+    source = {"kind": "git", "url": info["url"], "ref": info["tag"]}
+    first = GitResolver().resolve(source)
+
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_NOCACHE", "1")
+    (_cache / "upstream").rename(_cache / "elsewhere")  # the refresh cannot reach it
+    with pytest.raises(ResolutionError):
+        GitResolver().resolve(source)
+
+    assert (first.bundle_root / MANIFEST).is_file()  # the old clone is still there
+    assert [p.name for p in first.bundle_root.parent.iterdir()] == [first.bundle_root.name]
+
+
+def test_a_refresh_replaces_the_cached_clone_with_a_new_one(_cache, monkeypatch):
+    info = _make_upstream(_cache)
+    source = {"kind": "git", "url": info["url"], "ref": info["tag"]}
+    first = GitResolver().resolve(source)
+    (first.bundle_root / "added-by-hand").write_text("not in the repository")
+
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_NOCACHE", "1")
+    second = GitResolver().resolve(source)
+
+    assert second.bundle_root == first.bundle_root
+    assert not (second.bundle_root / "added-by-hand").exists()  # a new clone took its place
+    assert (second.bundle_root / MANIFEST).is_file()
+    assert [p.name for p in second.bundle_root.parent.iterdir()] == [second.bundle_root.name]
