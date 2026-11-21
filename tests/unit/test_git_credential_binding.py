@@ -354,3 +354,41 @@ def test_the_hint_reaches_the_error_a_caller_sees(monkeypatch) -> None:
         ResolutionError, match="did not accept the credential from FLUID_SCAFFOLD_TOKEN"
     ):
         GitResolver._git(["clone", URL, "/x"], url=URL, what="clone", credential=credential)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com\\@evil.example/o/r",  # a backslash: a parser may read it as a slash
+        "https://github.com\\.evil.example/o/r",
+        "https://github.com%2f@evil.example/o/r",
+        "https://github.com#@evil.example/o/r",
+        "https://github.com?@evil.example/o/r",
+        "https://github.com/o/r?x=1",
+        "https://github.com/o/r#frag",
+        "https://github.com/o /r",
+        "https://github.com/o/r\n",
+        "https://[::1]/o/r",
+        "https://g\u00efthub.com/o/r",  # not ASCII
+        "https://github.com:99999999/o/r",
+        "https://github.com:/o/r",
+        "https:///o/r",
+    ],
+)
+def test_a_credential_goes_only_to_a_url_no_parser_can_read_two_ways(operator, url: str) -> None:
+    with pytest.raises(ResolutionError):
+        _bind_auth(url, {"secret_ref": "FLUID_SCAFFOLD_TOKEN"})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/org/bundle",
+        "https://github.com/org/bundle.git",
+        "https://github.com",
+        "https://github.com:443/org/bundle",
+        "https://github.com/org/my-bundle_v2/sub.dir",
+    ],
+)
+def test_ordinary_https_urls_are_still_accepted(operator, url: str) -> None:
+    assert _bind_auth(url, {"secret_ref": "FLUID_SCAFFOLD_TOKEN"}) is not None

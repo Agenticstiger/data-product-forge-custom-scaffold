@@ -509,6 +509,11 @@ def _bind_auth(url: str, auth: Mapping[str, Any]) -> Optional[_AuthBinding]:
         )
     if parts.scheme != "https":
         raise ResolutionError(f"auth is only sent over https://, not {parts.scheme or 'this url'}")
+    if not _AUTH_URL.match(url):
+        raise ResolutionError(
+            "auth is only sent to a url of the form https://host[:port]/path with a plain host "
+            "name (no user, brackets, escapes, backslashes, query or fragment)"
+        )
     host = (parts.hostname or "").lower()
     if host not in {h.lower() for h in _csv(os.environ.get(_AUTH_HOSTS, ""))}:
         raise ResolutionError(
@@ -678,6 +683,11 @@ def _sweep_leftovers() -> None:
             continue
 
 
+# The only shape of url a credential is sent to: a plain ASCII host (no userinfo, brackets,
+# escapes or backslashes), an optional port, and a path without a query or fragment. Anything
+# a url parser might read two ways is refused, so the host checked here is the host git
+# connects to.
+_AUTH_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[^\s\\#?]*)?\Z")
 _CONFIG_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"']+", re.IGNORECASE)
 _USERINFO = re.compile(r"([a-z][a-z0-9+.-]*)://([^/?#@]*)@", re.IGNORECASE)
 

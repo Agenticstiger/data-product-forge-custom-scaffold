@@ -100,7 +100,8 @@ The rules, all enforced before git runs:
   host names). Unset, no token is sent anywhere.
 - `secret_ref` must start with `FLUID_SCAFFOLD_`. To allow other names, list prefixes in
   `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated).
-- `auth` goes only with an `https://` url. A `url` that carries credentials is refused.
+- `auth` goes only with an `https://host[:port]/path` url (a plain ASCII host name; no user,
+  brackets, escapes, backslashes, query or fragment). A `url` that carries credentials is refused.
 
 The token is handed to git in the environment, as an `http.<url>.extraHeader` for that url
 only (git 2.31 or newer), and redirects are refused for the fetch. It is on no command line,

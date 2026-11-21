@@ -39,8 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `secret_ref` must name a variable that starts with `FLUID_SCAFFOLD_`, or with a prefix
     listed in `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated). It is checked
     before the environment is read.
-  - `auth` goes only with an `https://` url. With `git+https://` (which used to go without
-    the token and without a word) or `ssh://` it is an error.
+  - `auth` goes only with an `https://` url of the plain form `https://host[:port]/path`
+    (an ASCII host name; no user, brackets, escapes, backslashes, query or fragment, which
+    a url parser could read two ways). With `git+https://` (which used to go without the
+    token and without a word) or `ssh://` it is an error.
   - A `url` that carries credentials (`https://user:token@host/...`) is refused: it would
     have been written into the lock as `mirror_url`.
 
