@@ -61,7 +61,7 @@ def test_paths_that_leave_the_root_or_name_nothing_are_refused(root: Path, raw: 
 @pytest.mark.parametrize("raw", [None, 5, b"x.txt", ["x.txt"]])
 def test_non_string_paths_are_refused(root: Path, raw: object) -> None:
     with pytest.raises(UnsafePathError, match="not a usable relative file path"):
-        confine(root, raw)  # type: ignore[arg-type]
+        confine(root, raw)
 
 
 def test_a_symlink_that_leads_out_of_the_root_is_refused(root: Path, tmp_path: Path) -> None:

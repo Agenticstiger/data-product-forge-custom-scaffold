@@ -20,13 +20,14 @@ from pathlib import Path
 from .errors import UnsafePathError
 
 
-def confine(out_root: Path, raw: str) -> str:
+def confine(out_root: Path, raw: object) -> str:
     """Return *raw* as a POSIX path relative to *out_root*.
 
-    *out_root* must already be resolved. A relative or absolute *raw* is accepted
-    as long as it resolves to a file location strictly inside *out_root*; the
-    returned path is the normalised one (``a/../b`` becomes ``b``), which is also
-    the key two actions share when they write the same file.
+    *out_root* must already be resolved. *raw* is the untrusted path of a planned
+    action, so any object is accepted and a non-string is refused. A relative or
+    absolute path is accepted as long as it resolves to a file location strictly
+    inside *out_root*. The returned path is the normalised one (``a/../b`` becomes
+    ``b``), which is also the key two actions share when they write the same file.
 
     Raises :class:`~data_product_forge_custom_scaffold.errors.UnsafePathError` for
     anything else: an empty or non-string path, a path that names the output root
