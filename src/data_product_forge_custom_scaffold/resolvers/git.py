@@ -72,6 +72,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -88,6 +89,9 @@ _AUTH_HOSTS = "FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS"  # hosts a credential may be se
 _SECRET_PREFIXES = "FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES"  # variable-name prefixes, besides:
 _DEFAULT_SECRET_PREFIX = "FLUID_SCAFFOLD_"
 _MIN_GIT = (2, 31)  # GIT_CONFIG_COUNT, which carries the credential without a command line
+
+# A leftover of a killed run younger than this may be a live run's staging directory.
+_LEFTOVER_AGE = 3600.0
 
 # Allowed URL schemes — any other scheme is rejected outright.
 _ALLOWED_SCHEMES = ("https://", "ssh://", "git@", "git+https://", "git+ssh://")
@@ -230,10 +234,13 @@ class GitResolver(Resolver):
             )
         binding = _bind_auth(url, source.get("auth") or {})  # refuses before anything is cached
 
+        _sweep_leftovers()
         cache_dir = self._cache_dir_for(url, str(ref), binding)
         refetch = bool(os.environ.get(_NOCACHE))
-        if cache_dir.is_dir():  # also on a refresh: if the fetch fails the old clone stays
-            _drop_stored_credentials(cache_dir, url)
+        if os.path.lexists(cache_dir):
+            _refuse_symlinks(cache_dir)
+            if cache_dir.is_dir():  # also on a refresh: if the fetch fails the old clone stays
+                _drop_stored_credentials(cache_dir, url)
         if not cache_dir.is_dir() or refetch:
             self._clone_into_cache(url, str(ref), cache_dir, source.get("auth") or {})
 
@@ -584,6 +591,43 @@ def _scrub_origin(git_dir: str, tainted_url: str, url: str) -> None:
         url=url,
         what="reset the remote URL",
     )
+
+
+def _refuse_symlinks(cache_dir: Path) -> None:
+    """A cache entry is never a symbolic link, nor is its ``.git`` or ``.git/config``.
+
+    ``git remote set-url`` would write through a linked config, and a linked directory would
+    be reused as if it were ours; the engine follows no link in its own cache.
+    """
+    for path in (cache_dir, cache_dir / ".git", cache_dir / ".git" / "config"):
+        if path.is_symlink():
+            raise ResolutionError(
+                f"cache entry {path} is a symbolic link; remove it (the engine does not "
+                f"follow links in its cache)"
+            )
+
+
+def _sweep_leftovers() -> None:
+    """Delete the ``.partial-*`` and ``.old-*`` directories that a killed run left behind.
+
+    One that holds a credential (a clone from an earlier version that was being deleted) goes
+    at once. The others go when they are older than an hour, which no live run's staging
+    directory is. A link is removed, never followed.
+    """
+    git_cache = cache_root() / "git"
+    try:
+        leftovers = [*git_cache.glob("*/.partial-*"), *git_cache.glob("*/.old-*")]
+    except OSError:
+        return
+    now = time.time()
+    for path in leftovers:
+        try:
+            if path.is_symlink():
+                path.unlink()
+            elif now - path.stat().st_mtime > _LEFTOVER_AGE or _stored_credentials(path):
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            continue
 
 
 _CONFIG_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"']+", re.IGNORECASE)
