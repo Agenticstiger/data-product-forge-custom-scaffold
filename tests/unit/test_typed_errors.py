@@ -10,12 +10,10 @@ Covers:
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 import pytest
-import yaml
 from fluid_sdk import CustomScaffold, ExecutionResult, PluginError, write_file_action
 
 from data_product_forge_custom_scaffold import Engine
@@ -32,68 +30,20 @@ from data_product_forge_custom_scaffold.errors import (
 )
 from data_product_forge_custom_scaffold.renderer import RenderError as RendererRenderError
 from data_product_forge_custom_scaffold.resolvers import ResolutionError
-
-FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
-SECRET = "sk-live-supersecret-do-not-leak"
-
-
-def _contract(bundle: Path, *, use: str = "ref:basic", variables: Dict[str, Any] | None = None):
-    pattern: Dict[str, Any] = {"use": use}
-    if variables is not None:
-        pattern["variables"] = variables
-    return {
-        "id": "typed-errors",
-        "extensions": {
-            "customScaffold": {
-                "libraries": [{"id": "ref", "source": {"kind": "path", "path": str(bundle)}}],
-                "patterns": [pattern],
-            }
-        },
-    }
+from tests.helpers import (
+    SECRET,
+    ScriptedScaffold,
+    path_contract,
+    reference_bundle,
+    reference_contract,
+    use_scaffold,
+    write_bundle,
+)
 
 
-def _bundle(root: Path, *, to: str) -> Path:
-    """A one-template bundle whose destination is *to* (may be a Jinja expression)."""
-    bundle = root / "bundle"
-    (bundle / "templates").mkdir(parents=True)
-    (bundle / "templates" / "t.j2").write_text("hello\n")
-    (bundle / "fluid-scaffold.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "fluid.dev/custom-scaffold.v1",
-                "bundle": {"name": "typed", "version": "1.0.0"},
-                "patterns": [
-                    {"name": "basic", "templates": [{"from": "templates/t.j2", "to": to}]}
-                ],
-            }
-        )
-    )
-    return bundle
-
-
-def _reference_bundle(root: Path) -> Path:
-    bundle = root / "reference_bundle"
-    shutil.copytree(FIXTURES / "reference_bundle", bundle)
-    return bundle
-
-
-class _RecordingScaffold:
-    """Duck-typed scaffold that plans fixed actions and records apply() calls."""
-
-    def __init__(self, actions: List[dict]) -> None:
-        self._actions = actions
-        self.applied = 0
-
-    def plan(self, contract):
-        return self._actions
-
-    def apply(self, actions):  # pragma: no cover - must never run in these tests
-        self.applied += 1
-        raise AssertionError("apply() must not run for a refused plan")
-
-
-def _use_scaffold(monkeypatch, scaffold) -> None:
-    monkeypatch.setattr(Engine, "_instantiate_scaffold", lambda self, *a, **k: scaffold)
+def _ref_contract(bundle: Path, *, use: str = "ref:basic", variables=None):
+    """A contract with library ``ref`` over *bundle*, running one pattern *use*."""
+    return path_contract(bundle, [use], lib="ref", variables=variables)
 
 
 # ── the hierarchy ────────────────────────────────────────────────────────────
@@ -135,44 +85,44 @@ def test_names_stay_importable_from_their_old_homes() -> None:
 
 
 def test_undeclared_library_is_a_contract_error(tmp_path: Path) -> None:
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
     with pytest.raises(ContractError, match="not declared"):
         Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(
-            _contract(bundle, use="ghost:basic")
+            _ref_contract(bundle, use="ghost:basic")
         )
 
 
 def test_unresolvable_bundle_is_a_bundle_error(tmp_path: Path) -> None:
     missing = tmp_path / "no-such-bundle"
     with pytest.raises(BundleError, match="not a directory") as ei:
-        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_contract(missing))
+        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_ref_contract(missing))
     assert isinstance(ei.value, ResolutionError)
 
 
 def test_unknown_pattern_is_a_bundle_error_with_the_sdk_message(tmp_path: Path) -> None:
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
     with pytest.raises(BundleError, match=r"pattern 'ref:nope'.*no pattern named 'nope'"):
         Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(
-            _contract(bundle, use="ref:nope")
+            _ref_contract(bundle, use="ref:nope")
         )
 
 
 def test_invalid_manifest_is_a_bundle_error(tmp_path: Path) -> None:
-    bundle = _bundle(tmp_path, to="x.txt")
+    bundle = write_bundle(tmp_path, {"basic": {"x.txt": "hello\n"}})
     (bundle / "fluid-scaffold.yaml").write_text("apiVersion: nope/v9\nbundle: {name: x}\n")
     with pytest.raises(BundleError, match="unsupported apiVersion"):
-        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_contract(bundle))
+        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_ref_contract(bundle))
 
 
 def test_scaffold_constructor_failure_is_redacted_to_its_type(tmp_path: Path, monkeypatch) -> None:
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
 
     def _ctor_boom(self, *a, **k):
         raise ValueError(SECRET)
 
     monkeypatch.setattr(Engine, "_instantiate_scaffold", _ctor_boom)
     with pytest.raises(BundleError) as ei:
-        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_contract(bundle))
+        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_ref_contract(bundle))
 
     assert "ValueError" in str(ei.value)
     assert SECRET not in str(ei.value)
@@ -180,27 +130,27 @@ def test_scaffold_constructor_failure_is_redacted_to_its_type(tmp_path: Path, mo
 
 
 def test_scaffold_constructor_plugin_error_keeps_its_message(tmp_path: Path, monkeypatch) -> None:
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
 
     def _ctor_user_error(self, *a, **k):
         raise PluginError("set the 'region' variable")
 
     monkeypatch.setattr(Engine, "_instantiate_scaffold", _ctor_user_error)
     with pytest.raises(BundleError, match="set the 'region' variable"):
-        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_contract(bundle))
+        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_ref_contract(bundle))
 
 
 def test_plan_and_apply_failures_have_their_own_types(tmp_path: Path, monkeypatch) -> None:
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
     engine = Engine(output_root=tmp_path / "out", contract_dir=tmp_path)
 
     class _PlanBoom:
         def plan(self, contract):
             raise RuntimeError(SECRET)
 
-    _use_scaffold(monkeypatch, _PlanBoom())
+    use_scaffold(monkeypatch, _PlanBoom())
     with pytest.raises(PlanError, match="plan failed for pattern 'ref:basic': RuntimeError") as ei:
-        engine.run(_contract(bundle))
+        engine.run(_ref_contract(bundle))
     assert SECRET not in str(ei.value)
 
     class _ApplyBoom:
@@ -210,11 +160,11 @@ def test_plan_and_apply_failures_have_their_own_types(tmp_path: Path, monkeypatc
         def apply(self, actions):
             raise RuntimeError(SECRET)
 
-    _use_scaffold(monkeypatch, _ApplyBoom())
+    use_scaffold(monkeypatch, _ApplyBoom())
     with pytest.raises(
         ApplyError, match="apply failed for pattern 'ref:basic': RuntimeError"
     ) as ei:
-        engine.run(_contract(bundle))
+        engine.run(_ref_contract(bundle))
     assert SECRET not in str(ei.value)
     assert ei.value.run is None  # raised by apply(), not reported by it
 
@@ -222,10 +172,9 @@ def test_plan_and_apply_failures_have_their_own_types(tmp_path: Path, monkeypatc
 def test_a_non_path_render_error_stays_redacted(tmp_path: Path) -> None:
     # Only the output-path refusal gained a message; every other RenderError keeps
     # surfacing as the exception type (a template's error text is not trusted).
-    bundle = _bundle(tmp_path, to="x.txt")
-    (bundle / "templates" / "t.j2").write_text("{{ undefined_name.attr }}\n")
+    bundle = write_bundle(tmp_path, {"basic": {"x.txt": "{{ undefined_name.attr }}\n"}})
     with pytest.raises(PlanError) as ei:
-        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_contract(bundle))
+        Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_ref_contract(bundle))
     assert str(ei.value) == "plan failed for pattern 'ref:basic': RenderError"
 
 
@@ -252,13 +201,13 @@ def _escaping(raw: str, tmp_path: Path) -> str:
 def test_templated_bundle_cannot_write_outside_the_output_dir(
     tmp_path: Path, dry_run: bool, to: str, dest
 ) -> None:
-    bundle = _bundle(tmp_path, to=to)
+    bundle = write_bundle(tmp_path, {"basic": {to: "hello\n"}})
     out = tmp_path / "out"
     variables = None if dest is None else {"dest": _escaping(dest, tmp_path)}
 
     with pytest.raises(UnsafePathError) as ei:
         Engine(output_root=out, contract_dir=tmp_path).run(
-            _contract(bundle, variables=variables), dry_run=dry_run
+            _ref_contract(bundle, variables=variables), dry_run=dry_run
         )
 
     assert str(ei.value).startswith("plan failed for pattern 'ref:basic': output path must ")
@@ -272,17 +221,17 @@ def test_templated_bundle_cannot_write_outside_the_output_dir(
 def test_plugin_plan_outside_the_output_dir_is_refused_before_apply(
     tmp_path: Path, monkeypatch, dry_run: bool, raw: str
 ) -> None:
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
     out = tmp_path / "out"
     path = _escaping(raw, tmp_path)
-    scaffold = _RecordingScaffold([write_file_action(path=path, content=b"x").to_dict()])
-    _use_scaffold(monkeypatch, scaffold)
+    scaffold = ScriptedScaffold([write_file_action(path=path, content=b"x").to_dict()])
+    use_scaffold(monkeypatch, scaffold)
 
     with pytest.raises(UnsafePathError, match="resolves outside the output directory") as ei:
-        Engine(output_root=out, contract_dir=tmp_path).run(_contract(bundle), dry_run=dry_run)
+        Engine(output_root=out, contract_dir=tmp_path).run(_ref_contract(bundle), dry_run=dry_run)
 
     assert f"{path!r}" in str(ei.value)
-    assert scaffold.applied == 0
+    assert scaffold.apply_calls == 0
     assert not (tmp_path / "evil.txt").exists()
     assert not (tmp_path / "abs-escape.txt").exists()
 
@@ -290,26 +239,26 @@ def test_plugin_plan_outside_the_output_dir_is_refused_before_apply(
 def test_a_symlink_planted_in_the_output_dir_cannot_redirect_a_write(
     tmp_path: Path, monkeypatch
 ) -> None:
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     (out / "link").symlink_to(outside, target_is_directory=True)
-    scaffold = _RecordingScaffold([write_file_action(path="link/x.txt", content=b"x").to_dict()])
-    _use_scaffold(monkeypatch, scaffold)
+    scaffold = ScriptedScaffold([write_file_action(path="link/x.txt", content=b"x").to_dict()])
+    use_scaffold(monkeypatch, scaffold)
 
     with pytest.raises(UnsafePathError):
-        Engine(output_root=out, contract_dir=tmp_path).run(_contract(bundle))
+        Engine(output_root=out, contract_dir=tmp_path).run(_ref_contract(bundle))
 
-    assert scaffold.applied == 0
+    assert scaffold.apply_calls == 0
     assert list(outside.iterdir()) == []
 
 
 def test_a_harmless_dot_dot_that_stays_inside_is_still_written(tmp_path: Path, monkeypatch) -> None:
     # The SDK's apply() has always accepted ``a/../b.txt`` (it resolves inside the
     # root); the pre-apply check must not turn that into a new refusal.
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
     out = tmp_path / "out"
 
     class _Inside(CustomScaffold):
@@ -318,8 +267,8 @@ def test_a_harmless_dot_dot_that_stays_inside_is_still_written(tmp_path: Path, m
         def plan(self, contract):
             return [write_file_action(path="a/../b.txt", content=b"ok").to_dict()]
 
-    _use_scaffold(monkeypatch, _Inside(output_root=out))
-    result = Engine(output_root=out, contract_dir=tmp_path).run(_contract(bundle))
+    use_scaffold(monkeypatch, _Inside(output_root=out))
+    result = Engine(output_root=out, contract_dir=tmp_path).run(_ref_contract(bundle))
 
     assert result.apply_result is not None and result.apply_result.failed == 0
     assert (out / "b.txt").read_bytes() == b"ok"
@@ -330,7 +279,7 @@ def test_non_write_actions_and_unusable_paths_are_left_to_apply(
 ) -> None:
     # An empty/non-string path or a non-file op is not the confinement check's job:
     # apply() reports it as a failed/skipped action, exactly as before.
-    bundle = _reference_bundle(tmp_path)
+    bundle = reference_bundle(tmp_path)
     odd = [
         {"op": "noop", "params": {"path": "../x"}},
         {"op": "write_file", "params": {"path": ""}},
@@ -347,8 +296,8 @@ def test_non_write_actions_and_unusable_paths_are_left_to_apply(
             seen.append(list(actions))
             return ExecutionResult(plugin="p", role="custom_scaffold", applied=0, failed=3)
 
-    _use_scaffold(monkeypatch, _Lenient())
-    result = Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_contract(bundle))
+    use_scaffold(monkeypatch, _Lenient())
+    result = Engine(output_root=tmp_path / "out", contract_dir=tmp_path).run(_ref_contract(bundle))
 
     assert seen == [odd]  # apply() saw every action, unrefused
     assert result.apply_result is not None and result.apply_result.failed == 3
@@ -358,14 +307,7 @@ def test_non_write_actions_and_unusable_paths_are_left_to_apply(
 
 
 def test_dry_run_previews_the_lock_a_real_run_writes(tmp_path: Path) -> None:
-    bundle = _reference_bundle(tmp_path)
-    contract = _contract(bundle, variables={"teamName": "platform"})
-    contract.update(
-        {
-            "metadata": {"owner": {"team": "t", "email": "t@example.com"}},
-            "environments": {"dev": {"metadata": {"labels": {"cloud.region": "us-east-1"}}}},
-        }
-    )
+    contract = reference_contract(reference_bundle(tmp_path))
 
     dry = Engine(output_root=tmp_path / "dry", contract_dir=tmp_path).run(contract, dry_run=True)
     real_out = tmp_path / "real"

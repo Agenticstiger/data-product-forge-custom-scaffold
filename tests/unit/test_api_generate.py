@@ -11,12 +11,10 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import inspect
-import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pytest
-import yaml
 from fluid_sdk import CustomScaffold, ExecutionResult, write_file_action
 
 import data_product_forge_custom_scaffold as pkg
@@ -31,86 +29,25 @@ from data_product_forge_custom_scaffold import (
     UnsafePathError,
     generate,
 )
-from data_product_forge_custom_scaffold.engine import Engine
 from data_product_forge_custom_scaffold.lockfile import LOCKFILE_NAME
 from data_product_forge_custom_scaffold.resolvers.base import ResolvedBundle
 from data_product_forge_custom_scaffold.resolvers.entrypoint import EntryPointResolver
+from tests.helpers import (
+    FIXTURES,
+    SECRET,
+    ScriptedScaffold,
+    path_contract,
+    reference_bundle,
+    reference_contract,
+    tree_digests,
+    use_scaffold,
+    write_bundle,
+)
 
-FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
-SECRET = "sk-live-supersecret-do-not-leak"
 HELLO_SHA256 = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
 
 
 # ── builders ────────────────────────────────────────────────────────────────
-
-
-def _bundle(root: Path, patterns: Dict[str, Dict[str, str]], *, name: str = "bundle") -> Path:
-    """A YAML/Jinja bundle: *patterns* maps pattern name -> {destination: file text}."""
-    bundle = root / name
-    (bundle / "templates").mkdir(parents=True)
-    declared = []
-    for pattern, files in patterns.items():
-        entries = []
-        for i, (dest, text) in enumerate(files.items()):
-            template = f"templates/{pattern}-{i}.j2"
-            (bundle / template).write_text(text)
-            entries.append({"from": template, "to": dest})
-        declared.append({"name": pattern, "templates": entries})
-    (bundle / "fluid-scaffold.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "apiVersion": "fluid.dev/custom-scaffold.v1",
-                "bundle": {"name": name, "version": "1.0.0"},
-                "patterns": declared,
-            }
-        )
-    )
-    return bundle
-
-
-def _contract(bundle: Path, patterns: Sequence[str], *, source: Any = None) -> Dict[str, Any]:
-    """A contract using *bundle* as library ``lib``; *patterns* are pattern names."""
-    return {
-        "id": "api-product",
-        "extensions": {
-            "customScaffold": {
-                "libraries": [
-                    {"id": "lib", "source": source or {"kind": "path", "path": str(bundle)}}
-                ],
-                "patterns": [{"use": f"lib:{p}"} for p in patterns],
-            }
-        },
-    }
-
-
-def _reference_contract(tmp_path: Path) -> Dict[str, Any]:
-    bundle = tmp_path / "reference_bundle"
-    if not bundle.exists():
-        shutil.copytree(FIXTURES / "reference_bundle", bundle)
-    return {
-        "fluidVersion": "0.7.4",
-        "kind": "DataProduct",
-        "id": "api-product",
-        "name": "API Product",
-        "metadata": {"owner": {"team": "t", "email": "t@example.com"}},
-        "environments": {"dev": {"metadata": {"labels": {"cloud.region": "us-east-1"}}}},
-        "extensions": {
-            "customScaffold": {
-                "libraries": [{"id": "ref", "source": {"kind": "path", "path": str(bundle)}}],
-                "patterns": [{"use": "ref:basic", "variables": {"teamName": "platform"}}],
-            }
-        },
-    }
-
-
-def _tree(root: Path) -> Dict[str, Tuple[str, int]]:
-    """Independent oracle: hash every file under *root* straight from disk."""
-    out: Dict[str, Tuple[str, int]] = {}
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            data = path.read_bytes()
-            out[path.relative_to(root).as_posix()] = (hashlib.sha256(data).hexdigest(), len(data))
-    return out
 
 
 def _rows(result: GenerationResult) -> Dict[str, Tuple[str, int]]:
@@ -121,30 +58,12 @@ def _scaffold_files(result: GenerationResult) -> List[GeneratedFile]:
     return [f for f in result.files if f.path != LOCKFILE_NAME]
 
 
-def _use_scaffold(monkeypatch, scaffold) -> None:
-    monkeypatch.setattr(Engine, "_instantiate_scaffold", lambda self, *a, **k: scaffold)
-
-
-class _Scaffold:
-    """Duck-typed scaffold: fixed plan, scriptable apply, records apply() calls."""
-
-    def __init__(self, actions: List[dict], apply=None) -> None:
-        self._actions = actions
-        self._apply = apply
-        self.apply_calls = 0
-
-    def plan(self, contract):
-        return self._actions
-
-    def apply(self, actions):
-        self.apply_calls += 1
-        if self._apply is None:
-            raise AssertionError("apply() must not run for a refused plan")
-        return self._apply(actions)
-
-
 def _one_file() -> List[dict]:
     return [write_file_action(path="a.txt", content=b"a").to_dict()]
+
+
+def _reference(tmp_path: Path) -> Dict[str, Any]:
+    return reference_contract(reference_bundle(tmp_path))
 
 
 # ── the result: rows, digests, sizes, order ─────────────────────────────────
@@ -152,11 +71,11 @@ def _one_file() -> List[dict]:
 
 def test_files_match_an_independent_hash_of_the_output_tree(tmp_path: Path) -> None:
     out = tmp_path / "out"
-    result = generate(_reference_contract(tmp_path), out)
+    result = generate(_reference(tmp_path), out)
 
     assert isinstance(result, GenerationResult) and result.dry_run is False
     # Every file on disk and nothing else, with digest and size agreeing.
-    assert _rows(result) == _tree(out)
+    assert _rows(result) == tree_digests(out)
     assert [f.path for f in result.files] == [
         ".gitlab-ci.yml",
         "README.md",
@@ -171,8 +90,8 @@ def test_files_match_an_independent_hash_of_the_output_tree(tmp_path: Path) -> N
 
 
 def test_digest_and_size_of_a_known_file(tmp_path: Path) -> None:
-    bundle = _bundle(tmp_path, {"p": {"hello.txt": "hello\n"}})
-    result = generate(_contract(bundle, ["p"]), tmp_path / "out")
+    bundle = write_bundle(tmp_path, {"p": {"hello.txt": "hello\n"}})
+    result = generate(path_contract(bundle, ["p"]), tmp_path / "out")
 
     hello = next(f for f in result.files if f.path == "hello.txt")
     assert hello == GeneratedFile(path="hello.txt", sha256=HELLO_SHA256, size=6)
@@ -180,15 +99,15 @@ def test_digest_and_size_of_a_known_file(tmp_path: Path) -> None:
 
 def test_the_lock_is_listed_so_the_rows_account_for_the_whole_tree(tmp_path: Path) -> None:
     out = tmp_path / "out"
-    result = generate(_reference_contract(tmp_path), out)
+    result = generate(_reference(tmp_path), out)
 
     lock = next(f for f in result.files if f.path == LOCKFILE_NAME)
-    assert (lock.sha256, lock.size) == _tree(out)[LOCKFILE_NAME]
+    assert (lock.sha256, lock.size) == tree_digests(out)[LOCKFILE_NAME]
     assert result.run.lockfile == out.resolve() / LOCKFILE_NAME
 
 
 def test_runs_in_different_directories_agree_byte_for_byte(tmp_path: Path) -> None:
-    contract = _reference_contract(tmp_path)
+    contract = _reference(tmp_path)
 
     first = generate(contract, tmp_path / "a")
     second = generate(contract, tmp_path / "deeper" / "b")
@@ -197,24 +116,24 @@ def test_runs_in_different_directories_agree_byte_for_byte(tmp_path: Path) -> No
 
 
 def test_a_rerun_into_the_same_directory_is_idempotent(tmp_path: Path) -> None:
-    contract = _reference_contract(tmp_path)
+    contract = _reference(tmp_path)
     out = tmp_path / "out"
 
     first = generate(contract, out)
     second = generate(contract, out)
 
     assert first.files == second.files
-    assert _rows(second) == _tree(out)
+    assert _rows(second) == tree_digests(out)
 
 
 def test_listing_is_sorted_and_independent_of_pattern_order(tmp_path: Path) -> None:
-    bundle = _bundle(
+    bundle = write_bundle(
         tmp_path,
         {"alpha": {"z.txt": "Z\n", "m.txt": "M\n"}, "beta": {"a.txt": "A\n", "docs/b.txt": "B\n"}},
     )
 
-    forward = generate(_contract(bundle, ["alpha", "beta"]), tmp_path / "f")
-    backward = generate(_contract(bundle, ["beta", "alpha"]), tmp_path / "b")
+    forward = generate(path_contract(bundle, ["alpha", "beta"]), tmp_path / "f")
+    backward = generate(path_contract(bundle, ["beta", "alpha"]), tmp_path / "b")
 
     expected = ["a.txt", "docs/b.txt", "m.txt", "z.txt"]
     assert [f.path for f in _scaffold_files(forward)] == expected
@@ -229,10 +148,10 @@ def test_listing_is_sorted_and_independent_of_pattern_order(tmp_path: Path) -> N
 def test_a_path_two_patterns_write_is_listed_once_with_the_later_bytes(
     tmp_path: Path, order: List[str], winner: str
 ) -> None:
-    bundle = _bundle(
+    bundle = write_bundle(
         tmp_path, {"first": {"same.txt": "FIRST\n"}, "second": {"same.txt": "SECOND\n"}}
     )
-    contract = _contract(bundle, order)
+    contract = path_contract(bundle, order)
     out = tmp_path / "out"
 
     real = generate(contract, out)
@@ -254,8 +173,8 @@ def test_a_contract_without_the_block_is_a_no_op(tmp_path: Path) -> None:
 
 
 def test_filters_restrict_patterns_and_libraries(tmp_path: Path) -> None:
-    bundle = _bundle(tmp_path, {"one": {"one.txt": "1\n"}, "two": {"two.txt": "2\n"}})
-    contract = _contract(bundle, ["one", "two"])
+    bundle = write_bundle(tmp_path, {"one": {"one.txt": "1\n"}, "two": {"two.txt": "2\n"}})
+    contract = path_contract(bundle, ["one", "two"])
 
     only_two = generate(contract, tmp_path / "p", pattern_filter=["lib:two"])
     assert [f.path for f in only_two.files] == [LOCKFILE_NAME, "two.txt"]
@@ -273,7 +192,7 @@ def test_filters_restrict_patterns_and_libraries(tmp_path: Path) -> None:
 
 
 def test_dry_run_writes_nothing_and_reports_what_a_real_run_writes(tmp_path: Path) -> None:
-    contract = _reference_contract(tmp_path)
+    contract = _reference(tmp_path)
     dry_out = tmp_path / "dry"
 
     dry = generate(contract, dry_out, dry_run=True)
@@ -289,9 +208,9 @@ def test_dry_run_leaves_an_existing_directory_untouched(tmp_path: Path) -> None:
     out.mkdir()
     (out / "keep.txt").write_text("keep")
 
-    result = generate(_reference_contract(tmp_path), out, dry_run=True)
+    result = generate(_reference(tmp_path), out, dry_run=True)
 
-    assert result.files and _tree(out) == {"keep.txt": _tree(out)["keep.txt"]}
+    assert result.files and tree_digests(out) == {"keep.txt": tree_digests(out)["keep.txt"]}
 
 
 # ── refusal of paths that leave out_dir ─────────────────────────────────────
@@ -303,11 +222,11 @@ def test_a_bundle_path_outside_out_dir_is_refused_and_nothing_is_written(
     tmp_path: Path, dry_run: bool, dest: str
 ) -> None:
     target = str(tmp_path / "abs-escape.txt") if dest == "ABSOLUTE" else dest
-    bundle = _bundle(tmp_path, {"p": {"ok.txt": "ok\n", target: "x\n"}})
+    bundle = write_bundle(tmp_path, {"p": {"ok.txt": "ok\n", target: "x\n"}})
     out = tmp_path / "out"
 
     with pytest.raises(UnsafePathError) as ei:
-        generate(_contract(bundle, ["p"]), out, dry_run=dry_run)
+        generate(path_contract(bundle, ["p"]), out, dry_run=dry_run)
 
     assert repr(target) in str(ei.value)
     assert isinstance(ei.value, EngineError)
@@ -319,12 +238,12 @@ def test_a_bundle_path_outside_out_dir_is_refused_and_nothing_is_written(
 def test_a_plugin_plan_outside_out_dir_is_refused_before_apply(
     tmp_path: Path, monkeypatch, dry_run: bool
 ) -> None:
-    scaffold = _Scaffold([write_file_action(path="../evil.txt", content=b"x").to_dict()])
-    _use_scaffold(monkeypatch, scaffold)
-    bundle = _bundle(tmp_path, {"p": {"x.txt": "x\n"}})
+    scaffold = ScriptedScaffold([write_file_action(path="../evil.txt", content=b"x").to_dict()])
+    use_scaffold(monkeypatch, scaffold)
+    bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(UnsafePathError, match="outside the output directory"):
-        generate(_contract(bundle, ["p"]), tmp_path / "out", dry_run=dry_run)
+        generate(path_contract(bundle, ["p"]), tmp_path / "out", dry_run=dry_run)
 
     assert scaffold.apply_calls == 0
     assert not (tmp_path / "evil.txt").exists()
@@ -335,12 +254,12 @@ def test_a_symlink_in_out_dir_cannot_redirect_a_write(tmp_path: Path, monkeypatc
     out.mkdir()
     outside.mkdir()
     (out / "link").symlink_to(outside, target_is_directory=True)
-    scaffold = _Scaffold([write_file_action(path="link/x.txt", content=b"x").to_dict()])
-    _use_scaffold(monkeypatch, scaffold)
-    bundle = _bundle(tmp_path, {"p": {"x.txt": "x\n"}})
+    scaffold = ScriptedScaffold([write_file_action(path="link/x.txt", content=b"x").to_dict()])
+    use_scaffold(monkeypatch, scaffold)
+    bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(UnsafePathError):
-        generate(_contract(bundle, ["p"]), out)
+        generate(path_contract(bundle, ["p"]), out)
 
     assert scaffold.apply_calls == 0 and list(outside.iterdir()) == []
 
@@ -349,8 +268,8 @@ def test_a_symlink_in_out_dir_cannot_redirect_a_write(tmp_path: Path, monkeypatc
 
 
 def test_undeclared_library_is_a_contract_error(tmp_path: Path) -> None:
-    bundle = _bundle(tmp_path, {"p": {"x.txt": "x\n"}})
-    contract = _contract(bundle, ["p"])
+    bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
+    contract = path_contract(bundle, ["p"])
     contract["extensions"]["customScaffold"]["patterns"] = [{"use": "ghost:p"}]
 
     with pytest.raises(ContractError, match="not declared"):
@@ -358,7 +277,7 @@ def test_undeclared_library_is_a_contract_error(tmp_path: Path) -> None:
 
 
 def test_unresolvable_bundle_is_a_bundle_error(tmp_path: Path) -> None:
-    contract = _contract(tmp_path / "missing", ["p"])
+    contract = path_contract(tmp_path / "missing", ["p"])
 
     with pytest.raises(BundleError, match="not a directory"):
         generate(contract, tmp_path / "out")
@@ -373,11 +292,11 @@ def test_plan_failure_is_a_plan_error_naming_only_the_exception_type(
     class _PlanBoom:
         plan = staticmethod(boom)
 
-    _use_scaffold(monkeypatch, _PlanBoom())
-    bundle = _bundle(tmp_path, {"p": {"x.txt": "x\n"}})
+    use_scaffold(monkeypatch, _PlanBoom())
+    bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(PlanError) as ei:
-        generate(_contract(bundle, ["p"]), tmp_path / "out")
+        generate(path_contract(bundle, ["p"]), tmp_path / "out")
 
     assert str(ei.value) == "plan failed for pattern 'lib:p': ValueError"
     assert SECRET not in str(ei.value)
@@ -389,11 +308,11 @@ def test_apply_exception_is_an_apply_error_naming_only_the_exception_type(
     def boom(_):
         raise RuntimeError(SECRET)
 
-    _use_scaffold(monkeypatch, _Scaffold(_one_file(), apply=boom))
-    bundle = _bundle(tmp_path, {"p": {"x.txt": "x\n"}})
+    use_scaffold(monkeypatch, ScriptedScaffold(_one_file(), apply=boom))
+    bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(ApplyError) as ei:
-        generate(_contract(bundle, ["p"]), tmp_path / "out")
+        generate(path_contract(bundle, ["p"]), tmp_path / "out")
 
     assert str(ei.value) == "apply failed for pattern 'lib:p': RuntimeError"
     assert SECRET not in str(ei.value)
@@ -416,11 +335,11 @@ def test_failed_files_raise_apply_error_that_lists_paths_not_error_text(
             ],
         )
 
-    _use_scaffold(monkeypatch, _Scaffold(_one_file(), apply=failed))
-    bundle = _bundle(tmp_path, {"p": {"x.txt": "x\n"}})
+    use_scaffold(monkeypatch, ScriptedScaffold(_one_file(), apply=failed))
+    bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(ApplyError) as ei:
-        generate(_contract(bundle, ["p"]), tmp_path / "out")
+        generate(path_contract(bundle, ["p"]), tmp_path / "out")
 
     assert str(ei.value) == "apply failed for 2 of 3 file(s): a.txt, b.txt"
     assert SECRET not in str(ei.value)
@@ -431,11 +350,11 @@ def test_failed_files_raise_apply_error_that_lists_paths_not_error_text(
 
 def test_a_planned_file_missing_after_apply_is_an_apply_error(tmp_path: Path, monkeypatch) -> None:
     ok = ExecutionResult(plugin="p", role="custom_scaffold", applied=1, failed=0)
-    _use_scaffold(monkeypatch, _Scaffold(_one_file(), apply=lambda actions: ok))
-    bundle = _bundle(tmp_path, {"p": {"x.txt": "x\n"}})
+    use_scaffold(monkeypatch, ScriptedScaffold(_one_file(), apply=lambda actions: ok))
+    bundle = write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
 
     with pytest.raises(ApplyError, match="'a.txt' was planned but could not be read back"):
-        generate(_contract(bundle, ["p"]), tmp_path / "out")
+        generate(path_contract(bundle, ["p"]), tmp_path / "out")
 
 
 def test_contract_must_be_a_mapping(tmp_path: Path) -> None:
@@ -449,11 +368,13 @@ def test_contract_must_be_a_mapping(tmp_path: Path) -> None:
 def test_a_relative_path_source_anchors_to_contract_dir_not_cwd(
     tmp_path: Path, monkeypatch
 ) -> None:
-    _bundle(tmp_path, {"p": {"x.txt": "x\n"}})
+    write_bundle(tmp_path, {"p": {"x.txt": "x\n"}})
     consumer, elsewhere = tmp_path / "consumer", tmp_path / "elsewhere"
     consumer.mkdir()
     elsewhere.mkdir()
-    contract = _contract(tmp_path / "bundle", ["p"], source={"kind": "path", "path": "../bundle"})
+    contract = path_contract(
+        tmp_path / "bundle", ["p"], source={"kind": "path", "path": "../bundle"}
+    )
     monkeypatch.chdir(elsewhere)
 
     anchored = generate(contract, tmp_path / "a", contract_dir=consumer)
@@ -507,11 +428,11 @@ def test_python_plugin_bundle_files_are_listed(tmp_path: Path, monkeypatch) -> N
 def test_generate_prints_nothing_and_touches_only_out_dir(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
-    contract = _reference_contract(tmp_path)
+    contract = _reference(tmp_path)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
-    before = _tree(tmp_path)
+    before = tree_digests(tmp_path)
 
     generate(contract, tmp_path / "out", contract_dir=tmp_path)
     generate(contract, tmp_path / "dry", dry_run=True, contract_dir=tmp_path)
@@ -519,7 +440,7 @@ def test_generate_prints_nothing_and_touches_only_out_dir(
     captured = capsys.readouterr()
     assert (captured.out, captured.err) == ("", "")
     assert list(elsewhere.iterdir()) == []  # nothing written to the cwd
-    after = {k: v for k, v in _tree(tmp_path).items() if not k.startswith("out/")}
+    after = {k: v for k, v in tree_digests(tmp_path).items() if not k.startswith("out/")}
     assert after == before
 
 
@@ -545,7 +466,7 @@ def test_signature_is_the_documented_one() -> None:
 
 
 def test_result_types_are_immutable_and_equality_ignores_the_raw_run(tmp_path: Path) -> None:
-    contract = _reference_contract(tmp_path)
+    contract = _reference(tmp_path)
     first = generate(contract, tmp_path / "a")
     second = generate(contract, tmp_path / "b")
 
