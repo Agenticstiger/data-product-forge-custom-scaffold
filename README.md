@@ -145,8 +145,8 @@ for f in result.files:
 the output directory as `(relative path, sha256, size)`, sorted by path — so a host
 can record the written files in a manifest without parsing `--json`. A dry run
 (`dry_run=True`) writes nothing and returns the same rows; a path that would leave
-the output directory is refused before anything is written; failures are typed
-(`EngineError` and subclasses). The command is a thin wrapper over it.
+the output directory is refused before its pattern is applied; engine failures are
+typed (`EngineError` and subclasses). The command is a thin wrapper over it.
 
 ```python
 def generate(contract, out_dir, *, contract_dir=None, dry_run=False,

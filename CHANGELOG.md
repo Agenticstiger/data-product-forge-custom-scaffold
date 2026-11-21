@@ -16,12 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path, so a host can record the written files in a manifest. The reproducibility
   lock is listed too. After a real run each digest is read back from disk; a dry run
   writes nothing, does not create `out_dir`, and returns the same rows from the
-  planned bytes. It never prints, exits or reads `sys.argv`. Reference:
+  planned bytes. It never writes to stdout, exits or reads `sys.argv`. Reference:
   [`docs/reference/library-api.md`](docs/reference/library-api.md).
 - **Typed errors.** `EngineError` gains subclasses — `ContractError`,
-  `BundleError`, `PlanError`, `ApplyError` and `UnsafePathError` — so a caller can
-  `except EngineError` once and still branch. `ResolutionError`, `ManifestError` and
-  `RenderError` keep their import paths and old bases and are now `EngineError`s too.
+  `BundleError`, `PlanError`, `ApplyError`, `OutputError` and `UnsafePathError` — so a
+  caller can `except EngineError` once and still branch. `ResolutionError`,
+  `ManifestError` and `RenderError` keep their import paths and old bases and are
+  now `EngineError`s too.
 - `EngineRunResult.lock_text` — the exact text of the lock for the run, set on a dry
   run as well.
 
@@ -31,8 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a dry run too: the destination is resolved (following existing symlinks) and
   must sit inside the output directory, else `UnsafePathError`. A Python plugin's
   plan can no longer be listed as "would write `../x`" on a dry run, and a plugin
-  with its own `apply()` is no longer unguarded. A path that stays inside
-  (`a/../b.txt`) is still accepted.
+  with its own `apply()` is no longer unguarded. The check runs per pattern, just
+  before that pattern is applied. A path that stays inside (`a/../b.txt`) is still
+  accepted.
+- A Python plugin whose plan escapes the output directory is now refused at plan
+  time: `fluid custom-scaffold` prints `error: plan failed ...` and exits `2`. Before,
+  the plan was applied and the SDK reported the file as failed (summary, exit `3`).
+  Nothing was written outside the output directory either way.
 - Templated bundles' output-path refusal now says which path and why
   (`output path must not contain '..': '../x'`) instead of the bare `RenderError`
   type name. Every other plan/apply failure inside plugin code is still reported by
@@ -40,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A library that does not resolve, an invalid manifest, or an unknown pattern name
   now prints `error: ...` and exits `2` — as the README's exit-code table says —
   instead of a Python traceback.
+- A plugin whose `plan()` returns a generator now has its plan applied: it is turned
+  into a list once, so confinement no longer consumes what `apply()` is given.
+- `fluid-scaffold.lock` is written with LF newlines on every platform (it was CRLF on
+  Windows), so its bytes — and the digest `generate()` reports — do not depend on it.
 - `fluid custom-scaffold` now runs on `generate()`. Its output, `--json` payload and
   exit codes are unchanged apart from the error cases above.
 
