@@ -86,6 +86,6 @@ class OutputError(EngineError):
     list can still use it — ``fluid custom-scaffold`` does exactly that.
     """
 
-    def __init__(self, message: str, *, run: Optional["EngineRunResult"] = None) -> None:
+    def __init__(self, message: str, *, run: "EngineRunResult") -> None:
         super().__init__(message)
         self.run = run

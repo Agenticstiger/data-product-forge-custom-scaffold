@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import shutil
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 import yaml
 from fluid_sdk import CustomScaffold
 
+from data_product_forge_custom_scaffold import cli
 from data_product_forge_custom_scaffold.engine import Engine
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -153,3 +155,11 @@ class SdkScaffold(CustomScaffold):
 def use_scaffold(monkeypatch: Any, scaffold: Any) -> None:
     """Make the engine use *scaffold* for every pattern (libraries still resolve)."""
     monkeypatch.setattr(Engine, "_instantiate_scaffold", lambda self, *a, **k: scaffold)
+
+
+def parse_cli(*argv: str) -> argparse.Namespace:
+    """Parse *argv* with the parser the host builds for the registered subcommand."""
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="cmd")
+    cli.make_register()(sub)
+    return parser.parse_args(list(argv))

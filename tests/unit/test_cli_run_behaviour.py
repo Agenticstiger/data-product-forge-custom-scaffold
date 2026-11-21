@@ -8,7 +8,6 @@ re-plumbing.
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import shutil
@@ -18,9 +17,8 @@ from typing import List, Tuple
 
 from fluid_sdk import ExecutionResult, write_file_action
 
-from data_product_forge_custom_scaffold import cli
 from data_product_forge_custom_scaffold.engine import Engine
-from tests.helpers import SdkScaffold, use_scaffold
+from tests.helpers import SdkScaffold, parse_cli, use_scaffold
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 SECRET = "sk-live-supersecret-do-not-leak"
@@ -57,10 +55,7 @@ def _project(tmp_path: Path, *, use: str = "ref:basic") -> Tuple[Path, Path]:
 
 
 def _cli(capsys, *argv: str) -> Tuple[int, str, str]:
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="cmd")
-    cli.make_register()(sub)
-    ns = parser.parse_args(["custom-scaffold", *argv])
+    ns = parse_cli("custom-scaffold", *argv)
     rc = ns.func(ns)
     captured = capsys.readouterr()
     return rc, captured.out, captured.err
