@@ -53,6 +53,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fluid custom-scaffold` now runs on `generate()`. Its output, `--json` payload and
   exit codes are unchanged apart from the error cases above.
 
+### Fixed
+
+- **`fluid-scaffold.lock` is no longer written through a symlink.** A symlink planted
+  at that name in the output directory (a checked-out repository can carry one) made
+  a run overwrite the link's target — a file outside the output directory — with the
+  lock YAML, which records contract variables verbatim. The lock path is now refused
+  if it is a symlink (`UnsafePathError`, before any pattern is applied, on a dry run
+  too), the write opens it without following links, and the same guard covers reading
+  the lock for `--pin` / `--update` and `generate()`'s read-back.
+- **A token used for a `git` branch or tag clone no longer stays in the cache.**
+  `git clone` records the URL it was given, token included, as `origin` in
+  `.git/config`; the remote is now reset to the credential-free URL straight after the
+  clone (and the clone deleted if that fails). Commit pins already passed the URL
+  inline.
+- **git never waits for a credential prompt.** Its subprocesses run with
+  `GIT_TERMINAL_PROMPT=0` unless the caller sets it, so a library call in a
+  non-interactive job cannot hang.
+
 ## [0.4.1] — 2026-06-27
 
 ### Fixed

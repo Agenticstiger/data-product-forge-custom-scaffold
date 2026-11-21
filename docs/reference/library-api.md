@@ -57,7 +57,7 @@ for f in result.files:
 | `contract` | The loaded contract (a mapping). Validate it first — `fluid validate`, or `make_validator`: beyond being a mapping it is not checked, so a malformed `extensions.customScaffold` block raises the underlying exception. A contract with no such block is a no-op: no files. A non-mapping raises `TypeError`. |
 | `out_dir` | The output root. Created on demand; a dry run does not create it. |
 | `contract_dir` | The directory a relative `path:` source is resolved against. Defaults to the current working directory, so pass the contract file's directory for a result that does not depend on where the process runs. |
-| `dry_run` | Plan and check every path, write nothing. `files` is then what a real run would write. A dry run does not touch the filesystem, so it cannot predict an I/O failure a real run would hit (an unwritable directory, a directory where a file is planned). |
+| `dry_run` | Plan and check every path, write nothing under `out_dir`. `files` is then what a real run would write. A dry run still resolves the libraries (a `git` source is cloned into the per-user cache) but writes no file into `out_dir`, so it cannot predict an I/O failure a real run would hit (an unwritable directory, a directory where a file is planned). |
 | `pattern_filter` | Only run patterns whose `use:` value is listed (`None` or empty: all). A sequence of strings; a bare string raises `TypeError`. |
 | `library_filter` | Only resolve libraries whose id is listed (`None` or empty: all). A pattern whose library is filtered out is skipped. A sequence of strings; a bare string raises `TypeError`. |
 | `pin` | Resolve `git` sources to the commit recorded in an existing `fluid-scaffold.lock` rather than following the contract's `ref`. See [reproducible updates](../walkthrough/reproducible-updates.md). |
@@ -120,7 +120,9 @@ newlines on every platform.
 ## Dry run
 
 `dry_run=True` resolves the libraries, plans every pattern and checks every path, but
-writes nothing and does not create `out_dir`. `files` is what a real run would write,
+writes nothing into `out_dir` and does not create it. (Resolving a `git` library still
+clones it into the per-user cache; git is run with `GIT_TERMINAL_PROMPT=0` unless you set
+it, so a credential prompt cannot hang a non-interactive job.) `files` is what a real run would write,
 including the lock, with digests of the planned bytes — so when the lock is written, a
 dry run and a real run of the same contract return equal `files`.
 
@@ -146,6 +148,11 @@ Patterns run in order, each planned, checked and applied in turn. A refusal in a
 pattern therefore leaves the earlier patterns' files in `out_dir` (as a failing
 `plan()` always has): discard a failed output directory.
 
+`fluid-scaffold.lock` is the engine's own file and is held to a stricter rule: it is never
+written or read through a symlink. A symlink at that name — pointing anywhere, inside
+`out_dir` or out of it — raises `UnsafePathError` before any pattern is applied, on a dry
+run too, and the write itself refuses a link that appears in the meantime.
+
 A harmless `a/../b.txt` that stays inside is accepted and reported as `b.txt`. The
 check sees the tree as it is when `generate()` runs; it cannot stop another process
 swapping a directory for a symlink in the instant before a write.
@@ -164,7 +171,7 @@ Everything the engine attributes to a contract, a bundle, a plugin or the output
 | `ContractError` | A pattern names a library the `customScaffold` block never declared. |
 | `BundleError` | A library does not resolve (`ResolutionError`), its manifest is invalid (`ManifestError`), it has no such pattern, or its plugin class fails to initialise. |
 | `PlanError` | A pattern's `plan()` failed. |
-| `UnsafePathError` | A planned path would land outside `out_dir` (a `RenderError`). |
+| `UnsafePathError` | A planned path would land outside `out_dir`, or `fluid-scaffold.lock` is a symlink (a `RenderError`). |
 | `ApplyError` | `apply()` raised, or reported failed files. |
 | `OutputError` | The run finished, but a planned file cannot be described: it is missing from `out_dir` after `apply()`, or (dry run) its action has no usable path or content. |
 
