@@ -278,6 +278,23 @@ def test_a_redirect_is_not_followed_and_the_error_says_so(server) -> None:
     assert all("moved.git" not in path for path, _, _ in server.requests)
 
 
+def test_a_followredirects_the_operator_sets_for_the_url_does_not_turn_redirects_back_on(
+    server,
+) -> None:
+    # The operator's setting is scoped to the same url as ours. If ours were the unscoped
+    # `http.followRedirects`, the more specific one would win and the header would follow the
+    # redirect to wherever it points.
+    Path(os.environ["GIT_CONFIG_GLOBAL"]).write_text(
+        f'[http "{server.url}"]\n\tfollowRedirects = true\n'
+    )
+    server.serving.redirect = True
+
+    with pytest.raises(ResolutionError, match="never sent to a redirect target"):
+        GitResolver().resolve(_source(server.url, "v1"))
+
+    assert [status for _, _, status in server.requests] == [301]  # asked once, not followed
+
+
 def test_a_port_the_operator_did_not_list_is_sent_nothing(server, monkeypatch) -> None:
     monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS", HOST)  # the https default port only
 

@@ -192,8 +192,37 @@ def test_the_token_is_in_the_environment_of_git_and_not_on_its_command_line(
     handed = env_log.read_text()
     assert f"GIT_CONFIG_VALUE_0=Authorization: Basic {_basic(TOKEN)}" in handed
     assert f"GIT_CONFIG_KEY_0=http.{URL}.extraHeader" in handed
-    assert "GIT_CONFIG_KEY_1=http.followRedirects" in handed
+    assert f"GIT_CONFIG_KEY_1=http.{URL}.followRedirects" in handed
     assert "GIT_CONFIG_VALUE_1=false" in handed
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs a POSIX shell")
+@pytest.mark.parametrize("auth", [True, False], ids=["with auth", "without auth"])
+def test_no_git_process_gets_a_variable_a_contract_may_name(
+    served: SimpleNamespace, monkeypatch, auth: bool
+) -> None:
+    # Every git the resolver starts (the version probe, the url probe, the clone, rev-parse)
+    # is run through a stand-in that records which such variables it was given.
+    real_git = shutil.which("git")
+    bin_dir = served.root / "bin"
+    bin_dir.mkdir()
+    log = served.root / "env.log"
+    script = bin_dir / "git"
+    script.write_text(
+        "#!/bin/sh\n"
+        f"env | grep -E '^(FLUID_SCAFFOLD_|MYORG_TOKENS_)' >> \"{log}\"\n"
+        f'exec "{real_git}" "$@"\n'
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FLUID_SCAFFOLD_OTHER", "another-secret")
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES", "MYORG_TOKENS_")
+    monkeypatch.setenv("MYORG_TOKENS_BOT", "a-third-secret")
+
+    bundle = GitResolver().resolve(_source("main", auth=auth))
+
+    assert (bundle.bundle_root / MANIFEST).is_file()
+    assert not log.exists() or log.read_text() == ""  # the stand-in ran, and saw none
 
 
 @pytest.mark.skipif(os.name == "nt", reason="GIT_TRACE paths are POSIX here")

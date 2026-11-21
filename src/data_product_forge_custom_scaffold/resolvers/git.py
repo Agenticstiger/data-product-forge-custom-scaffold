@@ -25,10 +25,14 @@ for a credential; where it may go is decided by the operator, outside the contra
 
 The token never appears on a command line. It is handed to git in the environment as an
 ``http.<url>.extraHeader`` (``GIT_CONFIG_COUNT``, git 2.31 or newer) scoped to the source's
-url, with ``http.followRedirects=false`` so it cannot follow a redirect to another host. git
-records it nowhere in the clone, and it is never logged. The cache key includes the host (and
-port) and the variable name (never the value), so an unauthenticated source cannot reuse a
-private clone. A clone that an earlier version made with the token in the url, whose git config
+url, and git is told not to follow a redirect from that url
+(``http.<url>.followRedirects=false``, scoped as well, so a setting the operator makes for the
+same url cannot turn redirects back on), so a redirect cannot carry the token to another host.
+The token is that header and nothing else: no variable a contract may name (``FLUID_SCAFFOLD_*``
+and the operator's prefixes) is passed to git or to the helpers it starts. git records the
+token nowhere in the clone, and it is never logged. The cache key includes the host (and port)
+and the variable name (never the value), so an unauthenticated source cannot reuse a private
+clone. A clone that an earlier version made with the token in the url, whose git config
 carries credentials, is deleted at the start of every run, but only one that the engine made:
 inside ``<cache>/git/<16 hex digits>/``, in a directory named for its own url (see
 :func:`_sweep_leftovers`). The one this run is about to reuse is cleaned in place first.
@@ -147,9 +151,19 @@ def _git_env(url: str = "", credential: Optional["_Credential"] = None) -> Dict[
       an ssh command (see :func:`_ssh_command_chosen`). The decision is about the URL as
       git will use it, so an https URL that ``url.<base>.insteadOf`` rewrites to ssh counts.
 
+    A variable whose name starts with a prefix a contract may name (``FLUID_SCAFFOLD_`` and the
+    operator's, see :func:`_secret_prefixes`) is left out: a token reaches git as the header
+    below and in no other way, not in the environment of git and of the helpers it starts. git's
+    own ``GIT_*`` variables are never left out.
+
     A *credential* is added last, as config in the environment (never on a command line).
     """
-    env = dict(os.environ)
+    prefixes = _secret_prefixes()
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name.startswith("GIT_") or not name.startswith(prefixes)
+    }
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
     if _effective_url(url, env).startswith(_SSH_PREFIXES) and not _ssh_command_chosen(env):
         env["GIT_SSH_COMMAND"] = _SSH_BATCH_MODE
@@ -476,10 +490,15 @@ class _Credential:
         return base64.b64encode(f"x-access-token:{self.token}".encode("utf-8")).decode("ascii")
 
     def config(self) -> List[Tuple[str, str]]:
-        """The git config that carries it: the header for this url only, and no redirects."""
+        """The git config that carries it: the header for this url only, and no redirects from it.
+
+        Both keys name the url. An unscoped ``http.followRedirects`` would lose to a setting
+        the operator scopes to the same url (the more specific key wins), and a followed
+        redirect would carry the header to another host.
+        """
         return [
             (f"http.{self.url}.extraHeader", f"Authorization: Basic {self._basic}"),
-            ("http.followRedirects", "false"),
+            (f"http.{self.url}.followRedirects", "false"),
         ]
 
     def redact(self, text: str) -> str:
@@ -523,12 +542,18 @@ def _allowed_endpoints() -> Set[str]:
     return allowed
 
 
+def _secret_prefixes() -> Tuple[str, ...]:
+    """The name prefixes a contract may ask for: the default, and the operator's."""
+    return (_DEFAULT_SECRET_PREFIX, *_csv(os.environ.get(_SECRET_PREFIXES, "")))
+
+
 def _bind_auth(url: str, auth: Any) -> Optional[_AuthBinding]:
     """Check what a source asks for against what the operator allows. Reads no token.
 
     *auth* is what the contract wrote. Absent (None) means no credential; anything else but a
-    mapping is an error rather than a source that quietly goes without one. A refusal names
-    the setting that would allow the source, never a value.
+    mapping is an error rather than a source that quietly goes without one, and so is a
+    ``secret_ref`` that is there but empty or null. A mapping without ``secret_ref`` asks for
+    nothing. A refusal names the setting that would allow the source, never a value.
     """
     if auth is None:
         return None
@@ -536,12 +561,12 @@ def _bind_auth(url: str, auth: Any) -> Optional[_AuthBinding]:
         raise ResolutionError(
             "auth must be a mapping, for example {secret_ref: FLUID_SCAFFOLD_TOKEN}"
         )
-    secret_ref = auth.get("secret_ref")
-    if secret_ref is None or secret_ref == "":
+    if "secret_ref" not in auth:
         return None
+    secret_ref = auth["secret_ref"]
     if not isinstance(secret_ref, str) or not secret_ref.isidentifier():
         raise ResolutionError(f"auth.secret_ref must be an env-var-shaped name, got {secret_ref!r}")
-    prefixes = (_DEFAULT_SECRET_PREFIX, *_csv(os.environ.get(_SECRET_PREFIXES, "")))
+    prefixes = _secret_prefixes()
     if not secret_ref.startswith(prefixes):
         raise ResolutionError(
             f"auth.secret_ref {secret_ref!r} is not a variable a contract may name: it must start "
@@ -592,7 +617,9 @@ def _credential(url: str, auth: Any) -> Optional[_Credential]:
 def _git_version() -> Tuple[int, int]:
     """The installed git's (major, minor); a version that cannot be read counts as new enough."""
     try:
-        out = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout
+        out = subprocess.run(
+            ["git", "--version"], capture_output=True, text=True, env=_git_env()
+        ).stdout
     except OSError as e:
         raise ResolutionError("git resolver requires the 'git' binary on PATH") from e
     found = re.search(r"(\d+)\.(\d+)", out)

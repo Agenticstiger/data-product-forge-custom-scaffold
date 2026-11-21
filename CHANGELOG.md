@@ -49,9 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refused: a user part can be the token, and it would have been written into the lock as
     `mirror_url`. Drop the user from the url, and use `auth` for a private repository. An
     `ssh://git@host/...` or `git@host:org/repo` url keeps its account name.
-  - `auth` that is not a mapping (`auth: FLUID_SCAFFOLD_TOKEN`, `auth: false`) is an error;
-    before, the source went on without a credential and nothing said so. An absent `auth`
-    is still none.
+  - `auth` that is not a mapping (`auth: FLUID_SCAFFOLD_TOKEN`, `auth: false`) is an error,
+    and so is an `auth.secret_ref` that is null or empty; before, the source went on without
+    a credential and nothing said so. An absent `auth`, or one without `secret_ref`, is
+    still none.
   - A `url` with a control character in it (a NUL, a newline) is refused.
 
   To migrate, rename the variable (`GITHUB_TOKEN` to `FLUID_SCAFFOLD_GITHUB_TOKEN`, in the
@@ -61,8 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ps` showed it, for `git` and for the `git-remote-https` it starts, to every user of the
   machine. It now reaches git as `http.<url>.extraHeader` in `GIT_CONFIG_COUNT` /
   `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` environment pairs, scoped to the source's
-  url, with `http.followRedirects=false` so it cannot follow a redirect to another host.
-  An environment is readable only by its owner and root. This needs git 2.31 or newer; an
+  url, and git is told not to follow a redirect from that url
+  (`http.<url>.followRedirects=false`, scoped too, so a `followRedirects` the operator sets
+  for the same url cannot turn redirects back on), so a redirect cannot carry the token to
+  another host. The token is that header and nothing else: no variable whose name starts
+  with `FLUID_SCAFFOLD_` or an operator-allowed prefix is passed to `git` or to the helpers
+  it starts, for any source (git's own `GIT_*` variables are never left out). An
+  environment is readable only by its owner and root. This needs git 2.31 or newer; an
   older git is an error. Because the url no longer carries it, a branch or tag is cloned
   as before whether or not a token is used. A fetch that carried a credential and failed
   now says what to check: that the server did not accept the token (naming the variable,

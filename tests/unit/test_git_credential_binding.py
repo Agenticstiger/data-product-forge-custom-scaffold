@@ -21,7 +21,7 @@ from data_product_forge_custom_scaffold.resolvers.git import (
     _Credential,
     _sanitise_url,
 )
-from tests.helpers import git_source, git_that_fails, patch_run
+from tests.helpers import completed, git_source, git_that_fails, patch_run
 
 URL = "https://github.com/org/bundle"
 SECRET = "ghp_VERYSECRETVALUE"
@@ -196,12 +196,22 @@ def test_the_operator_can_allow_more_prefixes(operator, monkeypatch) -> None:
     "name", ["not a name", "1ABC", "A-B", "", None, 7, 0, False, ["X"], [], {}]
 )
 def test_a_secret_name_must_be_a_plain_variable_name(operator, name) -> None:
-    auth = {"secret_ref": name}
-    if name is None or (isinstance(name, str) and not name):
-        assert _bind_auth(URL, auth) is None  # no auth asked for
-    else:
-        with pytest.raises(ResolutionError, match="env-var-shaped"):
-            _bind_auth(URL, auth)
+    # Including an empty or a null one: `secret_ref:` with nothing after it is a slip, and going
+    # on without a credential would hide it.
+    with pytest.raises(ResolutionError, match="env-var-shaped") as refused:
+        _bind_auth(URL, {"secret_ref": name})
+
+    assert repr(name) in str(refused.value)  # and it shows what it was given
+
+
+@pytest.mark.parametrize("name", [None, ""])
+def test_a_secret_ref_that_is_empty_or_null_is_refused_before_git_runs(
+    operator, monkeypatch, name
+) -> None:
+    _no_git(monkeypatch)
+
+    with pytest.raises(ResolutionError, match="env-var-shaped"):
+        GitResolver().resolve(_source(auth={"secret_ref": name}))
 
 
 @pytest.mark.parametrize("auth", [None, {}, {"hosts": ["x"]}])
@@ -370,7 +380,10 @@ def test_the_header_is_bound_to_the_url_and_redirects_are_refused() -> None:
 
     keys = dict(credential.config())
     assert keys[f"http.{URL}.extraHeader"].startswith("Authorization: Basic ")
-    assert keys["http.followRedirects"] == "false"
+    assert keys[f"http.{URL}.followRedirects"] == "false"
+    # Not the unscoped key: a followRedirects the operator scopes to the same url is more
+    # specific and would win over it, and a followed redirect carries the header along.
+    assert "http.followRedirects" not in keys
 
 
 def test_config_pairs_follow_the_ones_the_caller_already_set() -> None:
@@ -393,6 +406,47 @@ def test_a_count_git_would_reject_never_moves_the_pairs_below_zero(count: str) -
     assert env["GIT_CONFIG_COUNT"] == "2"  # ours stand alone, from index 0
     assert (env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_KEY_1"]) == ("a.b", "c.d")
     assert not any(key.startswith("GIT_CONFIG_KEY_-") for key in env)
+
+
+def test_git_runs_without_any_variable_a_contract_may_name(monkeypatch) -> None:
+    # The token reaches git as the header and nowhere else: not in the environment of git, nor
+    # of the credential helpers and transports it starts (for every source, not only one with
+    # `auth`).
+    monkeypatch.setenv("FLUID_SCAFFOLD_TOKEN", SECRET)
+    monkeypatch.setenv(PREFIXES, "MYORG_TOKENS_, ci_")
+    monkeypatch.setenv("MYORG_TOKENS_BOT", SECRET)
+    monkeypatch.setenv("ci_deploy", SECRET)
+    monkeypatch.setenv("UNRELATED_SETTING", "kept")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+    env = git_resolver._git_env()
+
+    assert [
+        name for name in env if name.startswith(("FLUID_SCAFFOLD_", "MYORG_TOKENS_", "ci_"))
+    ] == []
+    assert env["UNRELATED_SETTING"] == "kept" and env["GIT_CONFIG_NOSYSTEM"] == "1"
+
+
+def test_gits_own_variables_are_never_left_out_even_under_an_operators_prefix(monkeypatch) -> None:
+    monkeypatch.setenv(PREFIXES, "GIT_")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_SSL_NO_VERIFY", "true")
+
+    env = git_resolver._git_env()
+
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1" and env["GIT_SSL_NO_VERIFY"] == "true"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_the_version_probe_runs_without_them_too(monkeypatch) -> None:
+    monkeypatch.setenv("FLUID_SCAFFOLD_TOKEN", SECRET)
+    calls = patch_run(
+        monkeypatch, git_resolver, lambda args, kwargs: completed(args, "git version 2.40.0\n")
+    )
+
+    assert git_resolver._git_version() == (2, 40)
+
+    assert "FLUID_SCAFFOLD_TOKEN" not in calls[0][1]["env"]
 
 
 def test_a_git_too_old_to_carry_the_credential_is_an_error(operator, monkeypatch) -> None:

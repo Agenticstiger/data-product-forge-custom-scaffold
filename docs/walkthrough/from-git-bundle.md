@@ -107,8 +107,9 @@ The rules, all enforced before git runs:
   user part can be the token, and the lock would record it. Drop the user from the url.
 
 The token is handed to git in the environment, as an `http.<url>.extraHeader` for that url
-only (git 2.31 or newer), and redirects are refused for the fetch. It is on no command line,
-so `ps` does not show it, and it is not written to the cache or the lock or logged. A clone in the cache that an earlier
+only (git 2.31 or newer), and git does not follow a redirect from that url. It is on no command
+line, so `ps` does not show it, no variable a contract may name is passed to git or its helpers,
+and it is not written to the cache or the lock or logged. A clone in the cache that an earlier
 version made with the token in its url is deleted the next time any source is resolved (only
 that: nothing else in the cache directory is touched). The cache entry is keyed by the host, the port and the variable name, so a source
 without `auth` never reuses a private clone.
