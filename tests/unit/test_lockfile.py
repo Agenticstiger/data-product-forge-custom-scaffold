@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
+import pytest
 import yaml
 
 from data_product_forge_custom_scaffold import Engine
@@ -171,3 +173,16 @@ def test_write_lock_pins_lf_newlines_on_every_platform(tmp_path: Path, monkeypat
     write_lock(tmp_path, {"lockfileVersion": 1})
 
     assert seen.get("newline") == "\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_write_lock_is_never_group_or_world_writable_even_with_a_permissive_umask(tmp_path: Path):
+    # The lock is a normal checked-in file: readable by all, writable by its owner. The
+    # open() mode must not widen that when the process umask is 0.
+    previous = os.umask(0)
+    try:
+        path = write_lock(tmp_path, {"lockfileVersion": 1})
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
