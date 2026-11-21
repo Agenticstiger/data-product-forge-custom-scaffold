@@ -55,7 +55,7 @@ extensions:
           url: "https://github.com/example/ci-bundle"
           ref: "v1.0"
           subdir: "scaffold"                            # optional
-          auth: { secret_ref: GITHUB_TOKEN }            # optional
+          auth: { secret_ref: FLUID_SCAFFOLD_GITHUB_TOKEN }   # optional
     patterns:
       - use: ci:gitlab-ci                               # <library-id>:<pattern-name>
         variables:
@@ -70,7 +70,7 @@ extensions:
 | `git` | `git clone` into the cache. | Shared bundles distributed via a git repo. |
 | `entrypoint` | Loads a Python `CustomScaffold` subclass registered via `fluid_build.custom_scaffolds` entry-point. | Bundles that need full programmatic control (external API calls, complex conditionals). |
 
-Auth via `auth.secret_ref` (env-var name, never persisted).
+Auth via `auth.secret_ref`: the name of an environment variable (starting with `FLUID_SCAFFOLD_`) that holds a token. The operator, not the contract, decides where a token may go: list the hosts in `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS`. The token is never on a command line, in the cache or in the lock. See [`from-git-bundle.md`](docs/walkthrough/from-git-bundle.md).
 
 > **Note:** explicit npm and pypi source kinds (auto-fetch from registry) are not in v0. For pip-installable Python plugins, use `kind: entrypoint` after `pip install`-ing the plugin package. Git covers most YAML/Jinja distribution today. File an issue if you need direct-from-registry npm/pypi fetch.
 

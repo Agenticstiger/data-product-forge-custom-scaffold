@@ -76,7 +76,8 @@ FLUID_CUSTOM_SCAFFOLD_NOCACHE=1 fluid custom-scaffold
 
 ## Private git repos
 
-For private repos, declare an auth ref pointing at an env var holding a token:
+For private repos, the contract names an environment variable that holds a token. The
+operator, who runs the engine, decides which hosts a token may go to; a contract cannot.
 
 ```yaml
 source:
@@ -84,18 +85,29 @@ source:
   url: "https://github.com/my-org/private-bundle"
   ref: "v1.2.0"
   auth:
-    secret_ref: GITHUB_TOKEN          # env-var name, never the value
+    secret_ref: FLUID_SCAFFOLD_GITHUB_TOKEN   # an env-var name, never the value
 ```
 
 ```bash
-export GITHUB_TOKEN=ghp_xxx
+export FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS=github.com      # hosts a token may be sent to
+export FLUID_SCAFFOLD_GITHUB_TOKEN=ghp_xxx
 fluid custom-scaffold
 ```
 
-The token goes into the URL of the `git fetch` that downloads the bundle
-(`https://x-access-token:<token>@host/...`). It is never written to the cache, because a
-fetch by URL records no remote, and it is never logged. A cache made by an earlier version
-that still holds a token is cleaned the next time it is used.
+The rules, all enforced before git runs:
+
+- The host in `url` must be listed in `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS` (comma-separated, exact
+  host names). Unset, no token is sent anywhere.
+- `secret_ref` must start with `FLUID_SCAFFOLD_`. To allow other names, list prefixes in
+  `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated).
+- `auth` goes only with an `https://` url. A `url` that carries credentials is refused.
+
+The token is handed to git in the environment, as an `http.<url>.extraHeader` for that url
+only (git 2.31 or newer), and redirects are refused for the fetch. It is on no command line,
+so `ps` does not show it, and it is not written to the cache or the lock or logged. A cache
+made by an earlier version that still holds a token is cleaned the next time it is used.
+The cache entry is keyed by the host and the variable name, so a source without `auth` never
+reuses a private clone.
 
 ### SSH sources
 

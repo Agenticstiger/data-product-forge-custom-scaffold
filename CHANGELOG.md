@@ -28,6 +28,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: a `git` source's `auth` needs the operator to allow it.** A contract may
+  come from a pull request, and `auth.secret_ref` used to name any environment variable
+  while `url` named any host, so a contract could make the engine send any secret of the
+  process to a host of its choice. Now the contract only asks, and the operator decides,
+  in the process environment:
+  - `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS`: the host names (comma-separated, exact,
+    case-insensitive) a credential may be sent to. Unset or empty, none: a source with
+    `auth` is refused.
+  - `secret_ref` must name a variable that starts with `FLUID_SCAFFOLD_`, or with a prefix
+    listed in `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated). It is checked
+    before the environment is read.
+  - `auth` goes only with an `https://` url. With `git+https://` (which used to go without
+    the token and without a word) or `ssh://` it is an error.
+  - A `url` that carries credentials (`https://user:token@host/...`) is refused: it would
+    have been written into the lock as `mirror_url`.
+
+  To migrate, rename the variable (`GITHUB_TOKEN` to `FLUID_SCAFFOLD_GITHUB_TOKEN`, in the
+  contract and in the environment) and set `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS=github.com`.
+- **The token is on no command line.** It used to be part of the url given to `git`, so
+  `ps` showed it, for `git` and for the `git-remote-https` it starts, to every user of the
+  machine. It now reaches git as `http.<url>.extraHeader` in `GIT_CONFIG_COUNT` /
+  `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` environment pairs, scoped to the source's
+  url, with `http.followRedirects=false` so it cannot follow a redirect to another host.
+  An environment is readable only by its owner and root. This needs git 2.31 or newer; an
+  older git is an error. Because the url no longer carries it, a branch or tag is cloned
+  as before whether or not a token is used.
+- The cache key of a source with `auth` includes the host and the variable name (never the
+  value), so a source without `auth` cannot reuse a private clone. Keys of sources without
+  `auth` are unchanged; a source with `auth` is fetched once more under its new key.
 - **Planned output paths are confined before `apply()`**, for every bundle kind and
   on a dry run too: the destination is resolved (following existing symlinks) and
   must sit inside the output directory, else `UnsafePathError`. A Python plugin's
@@ -65,17 +94,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   owner-only (mode `0o600`); an existing lock keeps its mode when it is rewritten.
 - **A token used for a `git` source no longer reaches the cache.** `git clone <url>`
   records the URL it was given, token included, as `origin` in `.git/config` before it
-  transfers anything, so a run killed mid-transfer left the token on disk. A branch or
-  tag that needs the token is now fetched the way a commit pin always was (`git init`,
-  `git fetch --depth 1 -- <url> <ref>`, `git checkout FETCH_HEAD`): no remote is
-  recorded, and git strips the credentials from `FETCH_HEAD`. The ref is looked up as
-  `git clone --branch` looks it up, a branch first and then a tag, so the commit does not
-  depend on whether a token was used; a ref containing `:`, which is not a valid git ref
-  name, is refused. A source without a token is still cloned. A cached clone that still
-  carries credentials, made by an earlier version, is cleaned before it is reused, and
-  before a refresh too: a finished clone gets its plain `url` back as `origin`, and one
-  that did not finish, or that still holds credentials afterwards, is deleted and fetched
-  again.
+  transfers anything, so a run killed mid-transfer left the token on disk. The token is
+  no longer part of any URL (see "Changed" above: it goes to git in the environment), so
+  nothing records it; a ref containing `:`, which is not a valid git ref name, is refused.
+  A cached clone that still carries credentials, made by an earlier version, is cleaned
+  before it is reused, and before a refresh too: a finished clone gets its plain `url`
+  back as `origin`, and one that did not finish, or that still holds credentials
+  afterwards, is deleted and fetched again. A cache entry that is a symbolic link, or
+  whose `.git` or `.git/config` is one, is refused instead of reused or written through.
 - **A failed, interrupted or killed fetch no longer leaves a directory for the next run to
   reuse.** A clone is built in a `.partial-*` directory beside its final place and
   renamed into it when it is whole. Before, a commit pin that failed after `git init`, or
@@ -87,8 +113,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fetch the same source at once the second to finish keeps the first's clone (a refresh,
   which was asked for, does replace one). A clone that cannot be renamed aside is left
   whole and the run fails, rather than deleting it in place. A killed run
-  leaves only its `.partial-*` directory, which holds no token and can be deleted. A `ref`
-  made of dots (`.` or `..`) can no longer name the url's cache directory or its parent.
+  leaves only a `.partial-*` or `.old-*` directory, and the next run of any source sweeps
+  those: at once if one holds a token (a clone from an earlier version), else when it is
+  older than an hour. A `ref` made of dots (`.` or `..`) can no longer name the url's
+  cache directory or its parent.
 - **git and ssh never wait for an answer.** git runs with `GIT_TERMINAL_PROMPT=0` unless
   the caller sets it, and an ssh URL runs with `GIT_SSH_COMMAND=ssh -o BatchMode=yes`,
   so a library call in a non-interactive job cannot hang on a credential prompt, a key
@@ -100,8 +128,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host or one directory, and only git can say whether it applies), or a template
   directory (`init.templateDir`, `GIT_TEMPLATE_DIR`: its config is copied into every new
   repository). git gives `GIT_SSH_COMMAND` priority over the other two, so a default set
-  blindly would switch off a deploy key configured through either. To be prompted again,
-  set `GIT_SSH_COMMAND=ssh`.
+  blindly would switch off a deploy key configured through either. Whether a url is an
+  ssh one is decided on the url as git will use it, so an https url that
+  `url.<base>.insteadOf` rewrites to ssh gets the default too. To be prompted again, set
+  `GIT_SSH_COMMAND=ssh`.
 
 ## [0.4.1] — 2026-06-27
 
