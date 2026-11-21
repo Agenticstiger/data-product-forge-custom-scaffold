@@ -11,7 +11,6 @@ These tests run real git against stand-in ``ssh`` programs that log how they wer
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -25,6 +24,7 @@ from data_product_forge_custom_scaffold.resolvers.git import (
     GitResolver,
     _batch_mode_blocked,
     _git_env,
+    _git_version,
 )
 
 pytestmark = [
@@ -39,12 +39,6 @@ SSH_URLS = [
 ]
 HTTPS_URL = "https://example.invalid/org/repo"
 BATCH_MODE = "ssh -o BatchMode=yes"
-
-
-def _git_version() -> tuple:
-    out = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout
-    found = re.search(r"(\d+)\.(\d+)", out)
-    return (int(found.group(1)), int(found.group(2))) if found else (0, 0)
 
 
 needs_has_config = pytest.mark.skipif(
@@ -82,7 +76,7 @@ def world(tmp_path: Path, monkeypatch) -> Dict[str, Path]:
 def _ls_remote(url: str) -> str:
     """Run ``git ls-remote`` through the resolver; return the error it raises."""
     with pytest.raises(ResolutionError) as raised:
-        GitResolver._git(["ls-remote", url], clone_url=url, url=url, what="ls-remote")
+        GitResolver._git(["ls-remote", url], url=url, what="ls-remote")
     return str(raised.value)
 
 
@@ -150,9 +144,7 @@ def test_no_hint_when_the_caller_chose_the_ssh_command(world, monkeypatch) -> No
 def _clone(url: str, dest: Path) -> None:
     """The command the resolver runs for a plain branch or tag: `git clone`, outside any repo."""
     with pytest.raises(ResolutionError):
-        GitResolver._git(
-            ["clone", "--depth", "1", url, str(dest)], clone_url=url, url=url, what="clone"
-        )
+        GitResolver._git(["clone", "--depth", "1", url, str(dest)], url=url, what="clone")
 
 
 @pytest.mark.parametrize(
@@ -241,3 +233,26 @@ def test_a_template_directory_in_the_environment_means_the_same(world, monkeypat
     monkeypatch.setenv("GIT_TEMPLATE_DIR", "/somewhere/templates")
 
     assert "GIT_SSH_COMMAND" not in _git_env(SSH_URLS[0])
+
+
+def test_an_https_url_that_insteadof_rewrites_to_ssh_runs_in_batch_mode(
+    world, tmp_path: Path
+) -> None:
+    # git will use ssh for it, whatever scheme the contract wrote.
+    world["config"].write_text(
+        '[url "ssh://git@example.invalid/"]\n\tinsteadOf = https://example.invalid/\n'
+    )
+    url = "https://example.invalid/org/repo"
+
+    assert _git_env(url)["GIT_SSH_COMMAND"] == BATCH_MODE
+    _clone(url, tmp_path / "dest")
+    calls = _calls(world)
+    assert len(calls) == 1 and calls[0].startswith("ssh -o BatchMode=yes ")
+
+
+def test_an_ssh_url_that_insteadof_rewrites_to_https_gets_no_ssh_default(world) -> None:
+    world["config"].write_text(
+        '[url "https://example.invalid/"]\n\tinsteadOf = git@example.invalid:\n'
+    )
+
+    assert "GIT_SSH_COMMAND" not in _git_env("git@example.invalid:org/repo")
