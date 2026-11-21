@@ -33,7 +33,8 @@ it is reused.
 git never prompts on the terminal for a credential (``GIT_TERMINAL_PROMPT=0``
 unless the caller sets it), so a library call cannot hang waiting for input.
 
-ssh never waits for an answer either. An ssh URL runs with
+ssh never waits for an answer either. An ssh URL (as git will use it, after any
+``url.<base>.insteadOf`` rewrite) runs with
 ``GIT_SSH_COMMAND=ssh -o BatchMode=yes``, so a key passphrase or an unknown host key is
 an error, not a hang. The default is left out whenever the caller could be choosing the
 ssh command: ``GIT_SSH_COMMAND`` or ``GIT_SSH`` in the environment, a ``core.sshCommand``
@@ -125,17 +126,40 @@ def _git_env(url: str = "", credential: Optional["_Credential"] = None) -> Dict[
       it keeps its value.
     * For an ssh *url*, ``GIT_SSH_COMMAND=ssh -o BatchMode=yes`` stops ssh asking for a
       passphrase or a host-key confirmation. It is left out when the caller has chosen
-      an ssh command (see :func:`_ssh_command_chosen`).
+      an ssh command (see :func:`_ssh_command_chosen`). The decision is about the URL as
+      git will use it, so an https URL that ``url.<base>.insteadOf`` rewrites to ssh counts.
 
     A *credential* is added last, as config in the environment (never on a command line).
     """
     env = dict(os.environ)
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
-    if url.startswith(_SSH_PREFIXES) and not _ssh_command_chosen(env):
+    if _effective_url(url, env).startswith(_SSH_PREFIXES) and not _ssh_command_chosen(env):
         env["GIT_SSH_COMMAND"] = _SSH_BATCH_MODE
     if credential is not None:
         _add_git_config(env, credential.config())
     return env
+
+
+def _effective_url(url: str, env: Mapping[str, str]) -> str:
+    """*url* as git will use it, after any ``url.<base>.insteadOf`` rewrite.
+
+    ``git ls-remote --get-url`` expands the URL and exits without talking to the remote. It
+    runs outside any repository, like the ssh probe, and falls back to *url* if it cannot.
+    """
+    if not url:
+        return url
+    try:
+        probe = subprocess.run(
+            ["git", "ls-remote", "--get-url", url],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            env=dict(env),
+            cwd=tempfile.gettempdir(),
+        )
+    except OSError:  # no git binary: the command that needs it says so
+        return url
+    return probe.stdout.strip() if probe.returncode == 0 and probe.stdout.strip() else url
 
 
 def _add_git_config(env: Dict[str, str], pairs: Sequence[Tuple[str, str]]) -> None:

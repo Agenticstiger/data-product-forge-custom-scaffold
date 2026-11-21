@@ -239,3 +239,26 @@ def test_a_template_directory_in_the_environment_means_the_same(world, monkeypat
     monkeypatch.setenv("GIT_TEMPLATE_DIR", "/somewhere/templates")
 
     assert "GIT_SSH_COMMAND" not in _git_env(SSH_URLS[0])
+
+
+def test_an_https_url_that_insteadof_rewrites_to_ssh_runs_in_batch_mode(
+    world, tmp_path: Path
+) -> None:
+    # git will use ssh for it, whatever scheme the contract wrote.
+    world["config"].write_text(
+        '[url "ssh://git@example.invalid/"]\n\tinsteadOf = https://example.invalid/\n'
+    )
+    url = "https://example.invalid/org/repo"
+
+    assert _git_env(url)["GIT_SSH_COMMAND"] == BATCH_MODE
+    _clone(url, tmp_path / "dest")
+    calls = _calls(world)
+    assert len(calls) == 1 and calls[0].startswith("ssh -o BatchMode=yes ")
+
+
+def test_an_ssh_url_that_insteadof_rewrites_to_https_gets_no_ssh_default(world) -> None:
+    world["config"].write_text(
+        '[url "https://example.invalid/"]\n\tinsteadOf = git@example.invalid:\n'
+    )
+
+    assert "GIT_SSH_COMMAND" not in _git_env("git@example.invalid:org/repo")

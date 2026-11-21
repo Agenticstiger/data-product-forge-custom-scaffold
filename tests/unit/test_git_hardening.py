@@ -43,7 +43,7 @@ def test_git_subprocesses_never_prompt_by_default(monkeypatch) -> None:
     GitResolver._git_ok(["status"])
     GitResolver._head_sha(Path("."))
 
-    assert len(seen) == 3
+    assert len(seen) == 4  # `_git` also asks git how it will use the url
     assert all(kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0" for kwargs in seen)
 
 
