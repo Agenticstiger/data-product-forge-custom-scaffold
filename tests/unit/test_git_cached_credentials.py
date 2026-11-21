@@ -181,13 +181,77 @@ def test_a_clone_that_can_be_neither_scrubbed_nor_deleted_is_an_error(
 ) -> None:
     cache_dir = _cached_clone(cache, origin=WITH_TOKEN)
     _scrub_that_fails(monkeypatch)
-    monkeypatch.setattr(git_resolver.shutil, "rmtree", lambda *args, **kwargs: None)
+
+    def cannot(*args: Any, **kwargs: Any) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(git_resolver.os, "replace", cannot)  # no renaming it away ...
+    monkeypatch.setattr(
+        git_resolver.shutil, "rmtree", lambda *args, **kwargs: None
+    )  # ... or deleting
     _never_fetch(monkeypatch)
 
-    with pytest.raises(ResolutionError, match="cannot be removed"):
+    with pytest.raises(ResolutionError, match="could not be removed"):
         GitResolver().resolve(_source())
 
-    assert cache_dir.exists()  # nothing was reused: the error came first
+    assert (cache_dir / ".git" / "config").is_file()  # left whole, not half-deleted
+
+
+def test_a_tainted_clone_is_never_left_half_deleted(cache: Path, monkeypatch) -> None:
+    cache_dir = _unfinished_clone(WITH_TOKEN)
+    real_rmtree = shutil.rmtree
+
+    def interrupted(path, *args, **kwargs):
+        if Path(path).name.startswith(".old-"):
+            raise KeyboardInterrupt
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(git_resolver.shutil, "rmtree", interrupted)
+    _never_fetch(monkeypatch)
+
+    with pytest.raises(KeyboardInterrupt):
+        GitResolver().resolve(_source())
+
+    assert not cache_dir.exists()  # renamed away before the delete began
+
+
+@needs_git
+def test_a_failed_refresh_does_not_leave_a_token_in_the_old_clone(cache: Path, monkeypatch) -> None:
+    cache_dir = _cached_clone(cache, origin=WITH_TOKEN)
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_NOCACHE", "1")
+
+    def failing_fetch(self, *args: Any, **kwargs: Any) -> None:
+        raise ResolutionError("git fetch failed")
+
+    monkeypatch.setattr(GitResolver, "_clone_into_cache", failing_fetch)
+
+    with pytest.raises(ResolutionError):
+        GitResolver().resolve(_source())
+
+    assert TOKEN not in _tree_text(cache_dir / ".git")  # the old clone stays, without the token
+
+
+@needs_git
+def test_a_broken_clone_never_makes_git_rewrite_a_parent_repository(
+    cache: Path, monkeypatch
+) -> None:
+    # Under $HOME as a dotfiles repository, say. `git -C <broken clone>` would fall through to it.
+    parent = cache / "parent"
+    parent.mkdir()
+    _git("-C", str(parent), "init", "-q")
+    identity = ["-c", "user.email=t@t.t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]
+    _git("-C", str(parent), *identity, "commit", "-q", "--allow-empty", "-m", "c")
+    _git("-C", str(parent), "remote", "add", "origin", "https://parent.example/dotfiles")
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_CACHE", str(parent / "cache"))
+    _unfinished_clone(WITH_TOKEN)
+    fetched = _fetch_that_records(monkeypatch)
+
+    GitResolver().resolve(_source())
+
+    assert len(fetched) == 1  # the broken clone was deleted and fetched again
+    assert _git("-C", str(parent), "config", "--get", "remote.origin.url") == (
+        "https://parent.example/dotfiles"
+    )
 
 
 @pytest.mark.parametrize(
@@ -246,6 +310,7 @@ def test_what_counts_as_a_credential(url: str, expected: bool) -> None:
         '[remote "origin"]\n\turl = https://h/y\n\tpushurl = https://a:b@h/x\n',
         '[remote "origin"] # a comment on the header\n\turl = https://a:b@h/x\n',
         '[remote "origin"]\n\turl = https://a:b@h/x # a comment on the value\n',
+        '[remote "origin"]\n\turl = https://a:b@\\\nh/x\n',  # a line that ends in a backslash
         '[remote "upstream"]\n\turl = https://a:b@h/x\n',  # any remote, not only origin
     ],
     ids=[
@@ -256,6 +321,7 @@ def test_what_counts_as_a_credential(url: str, expected: bool) -> None:
         "pushurl",
         "header comment",
         "value comment",
+        "continued line",
         "another remote",
     ],
 )
@@ -288,3 +354,87 @@ def test_nothing_is_reported_when_there_is_no_credential_to_remove(
 
 def test_a_directory_with_no_git_config_has_no_stored_credentials(tmp_path: Path) -> None:
     assert _stored_credentials(tmp_path, PLAIN) == []
+
+
+def test_a_token_that_cannot_be_deleted_is_an_error_even_after_the_rename(
+    cache: Path, monkeypatch
+) -> None:
+    # The clone is renamed aside, so the cache path is clear, but the files cannot go (a read-only
+    # directory, say). The token is still on disk, so this must not pass silently, and the
+    # message says where it is.
+    _unfinished_clone(WITH_TOKEN)
+    real_rmtree = shutil.rmtree
+
+    def stuck(path, *args, **kwargs):
+        if Path(path).name.startswith(".old-"):
+            return None  # nothing could be deleted
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(git_resolver.shutil, "rmtree", stuck)
+    _never_fetch(monkeypatch)
+
+    with pytest.raises(
+        ResolutionError, match=r"could not be removed: delete .*\.old-[0-9a-f]+ by hand"
+    ):
+        GitResolver().resolve(_source())
+
+
+def test_leftovers_that_hold_no_credential_are_not_an_error(cache: Path, monkeypatch) -> None:
+    # A delete that leaves only read-only object files (common on Windows) has removed the token:
+    # the run goes on and fetches again, the leftovers are litter.
+    cache_dir = _unfinished_clone(WITH_TOKEN)
+    (cache_dir / ".git" / "objects").mkdir()
+    (cache_dir / ".git" / "objects" / "pack.pack").write_text("read-only")
+    real_rmtree = shutil.rmtree
+
+    def removes_all_but_the_objects(path, *args, **kwargs):
+        if Path(path).name.startswith(".old-"):
+            (Path(path) / ".git" / "config").unlink()
+            return None
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(git_resolver.shutil, "rmtree", removes_all_but_the_objects)
+    fetched = _fetch_that_records(monkeypatch)
+
+    bundle = GitResolver().resolve(_source())
+
+    assert fetched == [cache_dir]
+    assert (bundle.bundle_root / MANIFEST).is_file()
+
+
+def test_a_first_run_that_loses_the_race_keeps_the_clone_the_other_run_published(
+    cache: Path, monkeypatch
+) -> None:
+    # Another run publishes the same clone while this one is still fetching (both saw no cache).
+    cache_dir = GitResolver._cache_dir_for(PLAIN, "v1")
+
+    def fetch_while_the_other_run_publishes(self, clone_url, ref, target, url):
+        target.mkdir(parents=True)
+        (target / MANIFEST).write_text("apiVersion: ours\n")
+        cache_dir.mkdir(parents=True)  # the other run's clone appears first
+        (cache_dir / MANIFEST).write_text("apiVersion: theirs\n")
+
+    monkeypatch.setattr(GitResolver, "_clone_ref_into_cache", fetch_while_the_other_run_publishes)
+
+    bundle = GitResolver().resolve(_source())
+
+    assert (bundle.bundle_root / MANIFEST).read_text() == "apiVersion: theirs\n"
+    assert [p.name for p in cache_dir.parent.iterdir()] == [cache_dir.name]  # no staging left
+
+
+def test_a_refresh_replaces_the_clone_another_run_published(cache: Path, monkeypatch) -> None:
+    # Only a refresh that was asked for replaces an existing clone.
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_NOCACHE", "1")
+    cache_dir = GitResolver._cache_dir_for(PLAIN, "v1")
+    cache_dir.mkdir(parents=True)
+    (cache_dir / MANIFEST).write_text("apiVersion: old\n")
+
+    def fetch(self, clone_url, ref, target, url):
+        target.mkdir(parents=True)
+        (target / MANIFEST).write_text("apiVersion: new\n")
+
+    monkeypatch.setattr(GitResolver, "_clone_ref_into_cache", fetch)
+
+    bundle = GitResolver().resolve(_source())
+
+    assert (bundle.bundle_root / MANIFEST).read_text() == "apiVersion: new\n"

@@ -103,8 +103,8 @@ An `ssh://` or `git@host:org/repo` URL runs ssh without prompts (`-o BatchMode=y
 job cannot hang on a key passphrase or an unknown-host question: add the host to
 `known_hosts` and load the key into `ssh-agent` first. If you choose the ssh command
 yourself the default is left out: set `GIT_SSH_COMMAND` or `GIT_SSH`, or configure
-`core.sshCommand` (an `include` or `includeIf` in your git config also leaves it out, since
-an include can set `core.sshCommand` for one host or directory). To be prompted again, set
+`core.sshCommand` (an `include` or `includeIf` in your git config, or a template directory, also leaves it
+out, since either can set `core.sshCommand` for one host or directory). To be prompted again, set
 `GIT_SSH_COMMAND=ssh`.
 
 ## Pin a specific version

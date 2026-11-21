@@ -70,19 +70,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `git fetch --depth 1 -- <url> <ref>`, `git checkout FETCH_HEAD`): no remote is
   recorded, and git strips the credentials from `FETCH_HEAD`. The ref is looked up as
   `git clone --branch` looks it up, a branch first and then a tag, so the commit does not
-  depend on whether a token was used. A source without a token is still cloned. A cached
-  clone that still carries credentials, made by an earlier version, is cleaned before it
-  is reused: a finished clone gets its plain `url` back as `origin`, and one that did not
-  finish, or that still holds credentials afterwards, is deleted and fetched again.
+  depend on whether a token was used; a ref containing `:`, which is not a valid git ref
+  name, is refused. A source without a token is still cloned. A cached clone that still
+  carries credentials, made by an earlier version, is cleaned before it is reused, and
+  before a refresh too: a finished clone gets its plain `url` back as `origin`, and one
+  that did not finish, or that still holds credentials afterwards, is deleted and fetched
+  again.
 - **A failed, interrupted or killed fetch no longer leaves a directory for the next run to
   reuse.** A clone is built in a `.partial-*` directory beside its final place and
   renamed into it when it is whole. Before, a commit pin that failed after `git init`, or
   any run killed mid-transfer, left an empty or partial repository in the cache, and every
   later run failed with "missing fluid-scaffold.yaml" until it was deleted by hand. A
-  refresh (`FLUID_CUSTOM_SCAFFOLD_NOCACHE=1`) now keeps the old clone until the new one is
-  ready, and a missing token is reported before anything is deleted. A killed run leaves
-  only its `.partial-*` directory, which holds no token and can be deleted. A `ref` made of
-  dots (`.` or `..`) can no longer name the url's cache directory or its parent.
+  refresh (`FLUID_CUSTOM_SCAFFOLD_NOCACHE=1`) renames the old clone aside and deletes it
+  only once the new one is in place, so an interrupted refresh cannot leave a half-deleted
+  directory; a missing token is reported before anything is deleted; and when two runs
+  fetch the same source at once the second to finish keeps the first's clone (a refresh,
+  which was asked for, does replace one). A clone that cannot be renamed aside is left
+  whole and the run fails, rather than deleting it in place. A killed run
+  leaves only its `.partial-*` directory, which holds no token and can be deleted. A `ref`
+  made of dots (`.` or `..`) can no longer name the url's cache directory or its parent.
 - **git and ssh never wait for an answer.** git runs with `GIT_TERMINAL_PROMPT=0` unless
   the caller sets it, and an ssh URL runs with `GIT_SSH_COMMAND=ssh -o BatchMode=yes`,
   so a library call in a non-interactive job cannot hang on a credential prompt, a key
@@ -90,11 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is not in `ssh-agent`, is now an error that says how to fix it instead of a
   prompt. The ssh default is left out whenever the caller could be choosing the ssh
   command: `GIT_SSH_COMMAND` or `GIT_SSH` in the environment, a `core.sshCommand` in git
-  config, or any `include` / `includeIf` there (an include can set `core.sshCommand` for
-  one host or one directory, and only git can say whether it applies). git gives
-  `GIT_SSH_COMMAND` priority over the other two, so a default set blindly would switch
-  off a deploy key configured through either. To be prompted again, set
-  `GIT_SSH_COMMAND=ssh`.
+  config, any `include` / `includeIf` there (an include can set `core.sshCommand` for one
+  host or one directory, and only git can say whether it applies), or a template
+  directory (`init.templateDir`, `GIT_TEMPLATE_DIR`: its config is copied into every new
+  repository). git gives `GIT_SSH_COMMAND` priority over the other two, so a default set
+  blindly would switch off a deploy key configured through either. To be prompted again,
+  set `GIT_SSH_COMMAND=ssh`.
 
 ## [0.4.1] — 2026-06-27
 

@@ -27,12 +27,12 @@ ssh never waits for an answer either. An ssh URL runs with
 ``GIT_SSH_COMMAND=ssh -o BatchMode=yes``, so a key passphrase or an unknown host key is
 an error, not a hang. The default is left out whenever the caller could be choosing the
 ssh command: ``GIT_SSH_COMMAND`` or ``GIT_SSH`` in the environment, a ``core.sshCommand``
-in git config, or any ``include`` / ``includeIf`` directive (an include can set
+in git config, any ``include`` / ``includeIf`` directive (an include can set
 ``core.sshCommand`` for one host or one directory, and only git can say whether it
-applies). git gives ``GIT_SSH_COMMAND`` priority over the other two, so setting it
-blindly would switch off a deploy key configured through either. The configuration is
-read outside any repository, because the commands run here never read the current
-directory's own config.
+applies), or a template directory (its config is copied into every new repository). git
+gives ``GIT_SSH_COMMAND`` priority over the other two, so setting it blindly would switch
+off a deploy key configured through either. The configuration is read outside any
+repository, because the commands run here never read the current directory's own config.
 
 Cache layout::
 
@@ -44,8 +44,10 @@ force a re-fetch, delete the cache dir or set
 
 A clone is built in a ``.partial-*`` directory beside its final place and renamed into it
 when it is whole, so a directory under ``<urlhash>/<ref>`` is a finished clone even if the
-run is killed outright. A killed run leaves only the ``.partial-*`` directory, which holds
-no token and can be deleted.
+run is killed outright (one made by an earlier version excepted). A killed run leaves only
+the ``.partial-*`` directory, which holds no token and can be deleted. A refresh renames the
+old clone aside and deletes it once the new one is in place; a first run never removes a
+clone that another run published while it was fetching.
 
 Shells out to the ``git`` binary — no Python gitpython dependency.
 """
@@ -64,6 +66,9 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from ..manifest import MANIFEST_FILENAME
 from .base import ResolutionError, ResolvedBundle, Resolver, cache_root
+
+# Set to refetch a cached clone: it is replaced once the new one is whole.
+_NOCACHE = "FLUID_CUSTOM_SCAFFOLD_NOCACHE"
 
 # Allowed URL schemes — any other scheme is rejected outright.
 _ALLOWED_SCHEMES = ("https://", "ssh://", "git@", "git+https://", "git+ssh://")
@@ -114,15 +119,22 @@ def _ssh_command_chosen(env: Mapping[str, str]) -> bool:
     environment variables count by presence, as ``setdefault`` would. In git's
     configuration a ``core.sshCommand`` counts, and so does any ``include`` or
     ``includeIf``: an include can set it for one host or one directory and only git can say
-    whether it applies, so an include means "do not guess". The configuration is read from
+    whether it applies, so an include means "do not guess". So does a template directory
+    (``init.templateDir``, ``GIT_TEMPLATE_DIR``): its ``config`` is copied into every repository
+    ``git init`` makes, where it can set ``core.sshCommand``. The configuration is read from
     a directory outside any repository: the commands run here read the cache clone's own
     config, or none, never the current directory's.
     """
-    if "GIT_SSH_COMMAND" in env or "GIT_SSH" in env:
+    if any(name in env for name in ("GIT_SSH_COMMAND", "GIT_SSH", "GIT_TEMPLATE_DIR")):
         return True
     try:
         probe = subprocess.run(
-            ["git", "config", "--get-regexp", r"^(core\.sshcommand|include\.|includeif\.)"],
+            [
+                "git",
+                "config",
+                "--get-regexp",
+                r"^(core\.sshcommand|include\.|includeif\.|init\.templatedir)",
+            ],
             capture_output=True,
             text=True,
             errors="replace",
@@ -169,6 +181,8 @@ class GitResolver(Resolver):
             raise ResolutionError("git source missing required 'url'")
         if not ref:
             raise ResolutionError("git source missing required 'ref'")
+        if ":" in str(ref):
+            raise ResolutionError(f"git source ref {str(ref)!r} is not a valid git ref name")
         if not isinstance(url, str) or not any(url.startswith(s) for s in _ALLOWED_SCHEMES):
             raise ResolutionError(
                 f"git source url has disallowed scheme: {url!r} "
@@ -176,8 +190,8 @@ class GitResolver(Resolver):
             )
 
         cache_dir = self._cache_dir_for(url, str(ref))
-        refetch = bool(os.environ.get("FLUID_CUSTOM_SCAFFOLD_NOCACHE"))
-        if cache_dir.is_dir() and not refetch:
+        refetch = bool(os.environ.get(_NOCACHE))
+        if cache_dir.is_dir():  # also on a refresh: if the fetch fails the old clone stays
             _drop_stored_credentials(cache_dir, url)
         if not cache_dir.is_dir() or refetch:
             self._clone_into_cache(url, str(ref), cache_dir, source.get("auth") or {})
@@ -227,19 +241,7 @@ class GitResolver(Resolver):
         cache_dir: Path,
         auth: Mapping[str, Any],
     ) -> None:
-        clone_url = url
-        secret_ref = auth.get("secret_ref") if isinstance(auth, Mapping) else None
-        if secret_ref:
-            if not isinstance(secret_ref, str) or not secret_ref.isidentifier():
-                raise ResolutionError(
-                    f"auth.secret_ref must be an env-var-shaped name, got {secret_ref!r}"
-                )
-            token = os.environ.get(secret_ref)
-            if not token:
-                raise ResolutionError(
-                    f"auth.secret_ref points to env var {secret_ref!r} which is unset"
-                )
-            clone_url = self._inject_token(url, token)
+        clone_url = _authenticated_url(url, auth)
 
         # Build the clone beside its final place and move it in when it is whole, so a
         # killed run leaves a ``.partial-*`` directory, never a half-made cache directory
@@ -251,7 +253,7 @@ class GitResolver(Resolver):
                 self._fetch_into_cache(clone_url, ref, staging, url)
             else:
                 self._clone_ref_into_cache(clone_url, ref, staging, url)
-            _publish(staging, cache_dir)
+            _publish(staging, cache_dir, replace=bool(os.environ.get(_NOCACHE)))
         except BaseException:  # an interrupt too, not only a failed git command
             shutil.rmtree(staging, ignore_errors=True)
             raise
@@ -360,6 +362,19 @@ class GitResolver(Resolver):
             return ""
 
 
+def _authenticated_url(url: str, auth: Mapping[str, Any]) -> str:
+    """*url* with the token named by ``auth.secret_ref`` in it, or *url* when there is none."""
+    secret_ref = auth.get("secret_ref") if isinstance(auth, Mapping) else None
+    if not secret_ref:
+        return url
+    if not isinstance(secret_ref, str) or not secret_ref.isidentifier():
+        raise ResolutionError(f"auth.secret_ref must be an env-var-shaped name, got {secret_ref!r}")
+    token = os.environ.get(secret_ref)
+    if not token:
+        raise ResolutionError(f"auth.secret_ref points to env var {secret_ref!r} which is unset")
+    return GitResolver._inject_token(url, token)
+
+
 def _safe_ref(ref: str) -> str:
     """Sanitise a ref name for use as a cache directory name.
 
@@ -371,17 +386,49 @@ def _safe_ref(ref: str) -> str:
     return safe if safe.strip(".") else "_" * max(len(safe), 1)
 
 
-def _publish(staging: Path, cache_dir: Path) -> None:
-    """Move a finished clone into place; an older clone is replaced only now."""
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
+def _publish(staging: Path, cache_dir: Path, *, replace: bool) -> None:
+    """Move a finished clone into place.
+
+    A refresh (*replace*) renames the older clone out of the way first, so ``cache_dir`` is
+    always whole or absent, never half-deleted, and deletes it only once the new one is in
+    place. A first run never removes a clone: if another run published the same one while
+    this one was fetching, theirs stays (it may be in use) and this one is discarded.
+    """
+    previous = None
+    if replace and cache_dir.exists():
+        previous = cache_dir.with_name(f".old-{secrets.token_hex(8)}")
+        try:
+            os.replace(cache_dir, previous)
+        except FileNotFoundError:  # another refresh moved it first
+            previous = None
     try:
         os.replace(staging, cache_dir)
     except OSError:
-        if not cache_dir.is_dir():
+        if cache_dir.is_dir():
+            shutil.rmtree(staging, ignore_errors=True)
+        else:
+            if previous is not None:
+                os.replace(previous, cache_dir)  # put the older clone back
             raise
-        # Another run published the same clone first: keep theirs.
-        shutil.rmtree(staging, ignore_errors=True)
+    if previous is not None:
+        shutil.rmtree(previous, ignore_errors=True)
+
+
+def _discard(path: Path) -> Optional[Path]:
+    """Remove a directory so that it is never seen half-deleted; what is left of it, if any.
+
+    It is renamed away first (atomic) and deleted after: a process killed in between leaves
+    an ``.old-*`` directory, not a damaged *path*. A directory that cannot be renamed is left
+    whole, not deleted in place. Returns where whatever could not be deleted now is (*path*
+    itself when it could not be renamed), or None when nothing is left.
+    """
+    graveyard = path.with_name(f".old-{secrets.token_hex(8)}")
+    try:
+        os.replace(path, graveyard)
+    except OSError:
+        return path
+    shutil.rmtree(graveyard, ignore_errors=True)
+    return graveyard if graveyard.exists() else None
 
 
 def _drop_stored_credentials(cache_dir: Path, url: str) -> None:
@@ -390,41 +437,40 @@ def _drop_stored_credentials(cache_dir: Path, url: str) -> None:
     A clone made by an earlier version, or by a run killed mid-transfer, can carry
     ``https://x-access-token:<token>@host/...`` as ``origin``. A clone that finished is
     kept, with the plain URL put back. One that did not (it has no commit), or that still
-    holds credentials afterwards, is deleted so it is fetched again. Credentials that the
-    source's own ``url`` carries are the contract author's choice and are left alone.
+    holds credentials afterwards, is deleted so it is fetched again; if a credential cannot
+    be deleted that is an error, never silence. Credentials that the source's own ``url``
+    carries are the contract author's choice and are left alone.
     """
     tainted = _stored_credentials(cache_dir, url)
     if not tainted:
         return
-    if GitResolver._git_ok(["-C", str(cache_dir), "rev-parse", "--verify", "-q", "HEAD"]):
+    git_dir = str(cache_dir / ".git")  # not -C: a broken .git would fall through to a parent repo
+    if GitResolver._git_ok(["--git-dir", git_dir, "rev-parse", "--verify", "-q", "HEAD"]):
         try:
-            _scrub_origin(cache_dir, tainted[0], url)
+            _scrub_origin(git_dir, tainted[0], url)
         except ResolutionError:
-            pass  # the clone was deleted, or is checked again below
+            pass  # deleted below
         if not _stored_credentials(cache_dir, url):
             return
-    shutil.rmtree(cache_dir, ignore_errors=True)
-    if cache_dir.exists():
-        raise ResolutionError(f"cached clone {cache_dir} holds credentials and cannot be removed")
+    left = _discard(cache_dir)
+    if left is not None and _stored_credentials(left, url):
+        raise ResolutionError(
+            f"a cached clone that holds credentials could not be removed: delete {left} by hand"
+        )
 
 
-def _scrub_origin(cache_dir: Path, tainted_url: str, url: str) -> None:
+def _scrub_origin(git_dir: str, tainted_url: str, url: str) -> None:
     """Reset a cached clone's ``origin`` to the credential-free *url*.
 
-    ``git clone`` writes the URL it was given, token included, into ``.git/config``. Put
-    the plain URL back; if that fails, delete the clone rather than leave the token in
-    the cache.
+    ``git clone`` writes the URL it was given, token included, into ``.git/config``. Raises
+    :class:`ResolutionError` if git cannot.
     """
-    try:
-        GitResolver._git(
-            ["-C", str(cache_dir), "remote", "set-url", "origin", url],
-            clone_url=tainted_url,
-            url=url,
-            what="reset the remote URL",
-        )
-    except ResolutionError:
-        shutil.rmtree(cache_dir, ignore_errors=True)
-        raise
+    GitResolver._git(
+        ["--git-dir", git_dir, "remote", "set-url", "origin", url],
+        clone_url=tainted_url,
+        url=url,
+        what="reset the remote URL",
+    )
 
 
 _CONFIG_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"']+", re.IGNORECASE)
@@ -443,6 +489,7 @@ def _stored_credentials(cache_dir: Path, url: str) -> List[str]:
         text = (cache_dir / ".git" / "config").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
+    text = text.replace("\\\r\n", "").replace("\\\n", "")  # git joins a line ending in a backslash
     return [u for u in _CONFIG_URL.findall(text) if u != url and _has_credentials(u)]
 
 

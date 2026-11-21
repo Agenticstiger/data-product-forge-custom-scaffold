@@ -227,3 +227,17 @@ def test_no_hint_when_the_caller_set_the_same_command_themselves(monkeypatch) ->
     monkeypatch.setenv("GIT_SSH_COMMAND", BATCH_MODE)
 
     assert not _batch_mode_blocked("Host key verification failed.", {"GIT_SSH_COMMAND": BATCH_MODE})
+
+
+def test_a_template_directory_means_the_default_is_not_guessed(world, tmp_path: Path) -> None:
+    # A template's config is copied into every repository `git init` makes, where it can set
+    # core.sshCommand for the fetch that follows.
+    world["config"].write_text(f"[init]\n\ttemplateDir = {tmp_path / 'templates'}\n")
+
+    assert "GIT_SSH_COMMAND" not in _git_env(SSH_URLS[0])
+
+
+def test_a_template_directory_in_the_environment_means_the_same(world, monkeypatch) -> None:
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", "/somewhere/templates")
+
+    assert "GIT_SSH_COMMAND" not in _git_env(SSH_URLS[0])

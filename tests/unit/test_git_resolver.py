@@ -179,3 +179,18 @@ def test_a_refresh_that_fails_keeps_the_clone_it_was_to_replace(_cache, monkeypa
 
     assert (first.bundle_root / MANIFEST).is_file()  # the old clone is still there
     assert [p.name for p in first.bundle_root.parent.iterdir()] == [first.bundle_root.name]
+
+
+def test_a_refresh_replaces_the_cached_clone_with_a_new_one(_cache, monkeypatch):
+    info = _make_upstream(_cache)
+    source = {"kind": "git", "url": info["url"], "ref": info["tag"]}
+    first = GitResolver().resolve(source)
+    (first.bundle_root / "added-by-hand").write_text("not in the repository")
+
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_NOCACHE", "1")
+    second = GitResolver().resolve(source)
+
+    assert second.bundle_root == first.bundle_root
+    assert not (second.bundle_root / "added-by-hand").exists()  # a new clone took its place
+    assert (second.bundle_root / MANIFEST).is_file()
+    assert [p.name for p in second.bundle_root.parent.iterdir()] == [second.bundle_root.name]

@@ -123,7 +123,7 @@ newlines on every platform.
 writes nothing into `out_dir` and does not create it. (Resolving a `git` library still
 fetches it into the per-user cache. git runs with `GIT_TERMINAL_PROMPT=0` unless you set it,
 and an ssh URL with `ssh -o BatchMode=yes` unless you could be choosing the ssh command
-(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`, or an `include` in git config), so neither a
+(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`, or an `include` or template directory in git config), so neither a
 credential prompt nor an ssh passphrase or host-key question can hang a non-interactive job.) `files` is what a real run would write,
 including the lock, with digests of the planned bytes — so when the lock is written, a
 dry run and a real run of the same contract return equal `files`.
