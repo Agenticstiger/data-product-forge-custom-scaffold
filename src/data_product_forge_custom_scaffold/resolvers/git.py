@@ -157,7 +157,7 @@ class GitResolver(Resolver):
         cache_dir = self._cache_dir_for(url, str(ref))
         refetch = bool(os.environ.get("FLUID_CUSTOM_SCAFFOLD_NOCACHE"))
         if cache_dir.is_dir() and not refetch:
-            self._drop_stored_credentials(cache_dir, url)
+            _drop_stored_credentials(cache_dir, url)
         if not cache_dir.is_dir() or refetch:
             self._clone_into_cache(url, str(ref), cache_dir, source.get("auth") or {})
 
@@ -234,42 +234,6 @@ class GitResolver(Resolver):
             # An empty or half-made directory must not stay for a later run to reuse as if
             # it were a finished clone. This covers an interrupt (``KeyboardInterrupt``)
             # too, not only a failed git command.
-            shutil.rmtree(cache_dir, ignore_errors=True)
-            raise
-
-    def _drop_stored_credentials(self, cache_dir: Path, url: str) -> None:
-        """Take a token out of a cached clone's ``.git/config`` before the clone is reused.
-
-        A clone made by an earlier version, or by a run that was killed while it
-        transferred, can carry ``https://x-access-token:<token>@host/...`` as ``origin``.
-        Put the plain URL back; if that fails, delete the clone so it is fetched again.
-        Credentials that the source's own ``url`` carries are the contract author's
-        choice and are left alone.
-        """
-        origin = _origin_url(cache_dir)
-        if origin == url or not _has_credentials(origin):
-            return
-        try:
-            self._scrub_token(cache_dir, origin, url)
-        except ResolutionError:
-            if cache_dir.exists():  # it could not even be deleted: do not reuse it
-                raise
-
-    def _scrub_token(self, cache_dir: Path, clone_url: str, url: str) -> None:
-        """Reset a token clone's ``origin`` to the credential-free URL.
-
-        ``git clone`` writes the URL it was given, token included, into
-        ``.git/config``. Put the plain URL back; if that fails, delete the clone rather
-        than leave the token in the cache.
-        """
-        try:
-            self._git(
-                ["-C", str(cache_dir), "remote", "set-url", "origin", url],
-                clone_url=clone_url,
-                url=url,
-                what="reset the remote URL",
-            )
-        except ResolutionError:
             shutil.rmtree(cache_dir, ignore_errors=True)
             raise
 
@@ -367,6 +331,44 @@ class GitResolver(Resolver):
 def _safe_ref(ref: str) -> str:
     """Sanitise a ref name for use as a cache directory."""
     return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in ref)
+
+
+def _drop_stored_credentials(cache_dir: Path, url: str) -> None:
+    """Take a token out of a cached clone's ``.git/config`` before the clone is reused.
+
+    A clone made by an earlier version, or by a run that was killed while it
+    transferred, can carry ``https://x-access-token:<token>@host/...`` as ``origin``.
+    Put the plain URL back; if that fails, delete the clone so it is fetched again.
+    Credentials that the source's own ``url`` carries are the contract author's
+    choice and are left alone.
+    """
+    origin = _origin_url(cache_dir)
+    if origin == url or not _has_credentials(origin):
+        return
+    try:
+        _scrub_origin(cache_dir, origin, url)
+    except ResolutionError:
+        if cache_dir.exists():  # it could not even be deleted: do not reuse it
+            raise
+
+
+def _scrub_origin(cache_dir: Path, tainted_url: str, url: str) -> None:
+    """Reset a cached clone's ``origin`` to the credential-free *url*.
+
+    ``git clone`` writes the URL it was given, token included, into ``.git/config``. Put
+    the plain URL back; if that fails, delete the clone rather than leave the token in
+    the cache.
+    """
+    try:
+        GitResolver._git(
+            ["-C", str(cache_dir), "remote", "set-url", "origin", url],
+            clone_url=tainted_url,
+            url=url,
+            what="reset the remote URL",
+        )
+    except ResolutionError:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        raise
 
 
 _ORIGIN_SECTION = re.compile(r'\[\s*remote\s+"origin"\s*\]|\[\s*remote\.origin\s*\]', re.IGNORECASE)

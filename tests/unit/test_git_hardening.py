@@ -17,7 +17,7 @@ import pytest
 
 from data_product_forge_custom_scaffold.resolvers import git as git_resolver
 from data_product_forge_custom_scaffold.resolvers.base import ResolutionError
-from data_product_forge_custom_scaffold.resolvers.git import GitResolver
+from data_product_forge_custom_scaffold.resolvers.git import GitResolver, _scrub_origin
 
 TOKEN = "s3cret-token-value"
 PLAIN_URL = "https://example.com/org/repo"
@@ -97,7 +97,7 @@ def test_scrub_removes_the_token_from_a_real_repository_config(tmp_path: Path) -
     subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", token_url], check=True)
     assert TOKEN in (repo / ".git" / "config").read_text()  # what a token clone leaves behind
 
-    GitResolver()._scrub_token(repo, token_url, PLAIN_URL)
+    _scrub_origin(repo, token_url, PLAIN_URL)
 
     config = (repo / ".git" / "config").read_text()
     assert TOKEN not in config
