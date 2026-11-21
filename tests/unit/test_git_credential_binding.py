@@ -183,13 +183,14 @@ def test_the_default_prefix_is_fixed(operator, name: str, allowed: bool) -> None
 
 
 def test_the_operator_can_allow_more_prefixes(operator, monkeypatch) -> None:
-    monkeypatch.setenv(PREFIXES, "MYORG_TOKENS_, ci_")
+    monkeypatch.setenv(PREFIXES, "MYORG_TOKENS_, ci_bot_, GITHUB_")
 
     assert _bind_auth(URL, {"secret_ref": "MYORG_TOKENS_GITHUB"}) is not None
-    assert _bind_auth(URL, {"secret_ref": "ci_bot"}) is not None
+    assert _bind_auth(URL, {"secret_ref": "ci_bot_main"}) is not None
+    assert _bind_auth(URL, {"secret_ref": "GITHUB_TOKEN"}) is not None  # GIT... but not GIT_
     assert _bind_auth(URL, {"secret_ref": "FLUID_SCAFFOLD_TOKEN"}) is not None  # still allowed
     with pytest.raises(ResolutionError):
-        _bind_auth(URL, {"secret_ref": "GITHUB_TOKEN"})
+        _bind_auth(URL, {"secret_ref": "GITLAB_TOKEN"})
 
 
 @pytest.mark.parametrize(
@@ -413,29 +414,64 @@ def test_git_runs_without_any_variable_a_contract_may_name(monkeypatch) -> None:
     # of the credential helpers and transports it starts (for every source, not only one with
     # `auth`).
     monkeypatch.setenv("FLUID_SCAFFOLD_TOKEN", SECRET)
-    monkeypatch.setenv(PREFIXES, "MYORG_TOKENS_, ci_")
+    monkeypatch.setenv(PREFIXES, "MYORG_TOKENS_, ci_bot_")
     monkeypatch.setenv("MYORG_TOKENS_BOT", SECRET)
-    monkeypatch.setenv("ci_deploy", SECRET)
+    monkeypatch.setenv("ci_bot_deploy", SECRET)
     monkeypatch.setenv("UNRELATED_SETTING", "kept")
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
 
     env = git_resolver._git_env()
 
     assert [
-        name for name in env if name.startswith(("FLUID_SCAFFOLD_", "MYORG_TOKENS_", "ci_"))
+        name for name in env if name.startswith(("FLUID_SCAFFOLD_", "MYORG_TOKENS_", "ci_bot_"))
     ] == []
     assert env["UNRELATED_SETTING"] == "kept" and env["GIT_CONFIG_NOSYSTEM"] == "1"
 
 
-def test_gits_own_variables_are_never_left_out_even_under_an_operators_prefix(monkeypatch) -> None:
-    monkeypatch.setenv(PREFIXES, "GIT_")
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_SSL_NO_VERIFY", "true")
+@pytest.mark.parametrize(
+    ("prefixes", "named"),
+    [
+        ("P", "P"),  # would drop PATH and PWD from git's environment
+        ("PAT", "PAT"),
+        ("MYORG_TOKENS_, P", "P"),
+        ("GIT_", "GIT_"),  # git's own namespace: its variables would stay in git's environment
+        ("GIT_TOKEN_", "GIT_TOKEN_"),
+        ("MYORG_TOKENS_,GIT_", "GIT_"),
+    ],
+)
+def test_an_operator_prefix_that_would_break_gits_environment_is_refused(
+    monkeypatch, prefixes: str, named: str
+) -> None:
+    # The prefixes decide which variables a contract may name and which git is never given, so
+    # an entry that matches ordinary variables, or git's own, is a mistake to refuse (for every
+    # git source, whatever its `auth`: the environment is built the same way for all of them).
+    monkeypatch.setenv(PREFIXES, prefixes)
+    _no_git(monkeypatch)
 
-    env = git_resolver._git_env()
+    with pytest.raises(ResolutionError, match=PREFIXES) as refused:
+        GitResolver().resolve(_source())
 
-    assert env["GIT_CONFIG_NOSYSTEM"] == "1" and env["GIT_SSL_NO_VERIFY"] == "true"
-    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert repr(named) in str(refused.value)
+
+
+def test_a_bad_operator_prefix_is_refused_for_a_cached_source_too(
+    isolated_git_cache, monkeypatch
+) -> None:
+    # Nothing here would start git, but the check does not depend on what the source does.
+    cache_dir = GitResolver._cache_dir_for(URL, "v1")
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "fluid-scaffold.yaml").write_text("apiVersion: forge.scaffold/v1\n")
+    monkeypatch.setenv(PREFIXES, "P")
+
+    with pytest.raises(ResolutionError, match=PREFIXES):
+        GitResolver().resolve(_source())
+
+
+@pytest.mark.parametrize("prefixes", ["MYORG_TOKENS_", "GITHUB_", "ci_bot_, build_", "ABCD", " "])
+def test_ordinary_operator_prefixes_are_accepted(monkeypatch, prefixes: str) -> None:
+    monkeypatch.setenv(PREFIXES, prefixes)
+
+    assert git_resolver._secret_prefixes()[0] == "FLUID_SCAFFOLD_"
 
 
 def test_the_version_probe_runs_without_them_too(monkeypatch) -> None:
