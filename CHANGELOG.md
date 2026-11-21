@@ -126,9 +126,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer used, so nothing would ever have cleaned them) is deleted at the start of every
   run, but only if the engine made it: it must sit in `<cache>/git/<16 hex digits>/`, and
   that directory must be named for the digest of the clone's own origin url without the
-  token. The sweep looks at nothing else, so a `FLUID_CUSTOM_SCAFFOLD_CACHE` that points at
+  token (or of the url as the contract wrote it, for a clone whose own url carried the
+  credential: 0.1.0 to 0.4.1 accepted `https://<token>@host/...`). The sweep looks at
+  nothing else, so a `FLUID_CUSTOM_SCAFFOLD_CACHE` that points at
   a wide directory such as `$HOME` costs nothing (`~/git/<org>/<repo>` is not touched), and a
-  `<cache>/git` that is a symbolic link is not swept at all. A cache entry that is a
+  `<cache>/git` that is a symbolic link is not swept at all. One race remains, once, after
+  an upgrade: a run that is cleaning such a clone can lose it to the sweep of another run
+  and fail once; nothing else is lost, and the next run fetches the clone again. A cache entry that is a
   symbolic link, or whose `.git` or `.git/config` is one, is refused instead of reused or
   written through.
 - **A failed, interrupted or killed fetch no longer leaves a directory for the next run to

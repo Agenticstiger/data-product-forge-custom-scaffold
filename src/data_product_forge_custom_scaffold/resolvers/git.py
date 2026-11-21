@@ -757,23 +757,41 @@ def _last_changed(path: Path) -> float:
     return max(stat.st_mtime, stat.st_ctime)
 
 
-def _without_user(url: str) -> str:
-    """*url* with the user part of its authority removed: the url its cache key was made from."""
-    match = _USERINFO.match(url)
-    return f"{match.group(1)}://{url[match.end():]}" if match else url
+def _contract_urls(stored: str) -> List[str]:
+    """The urls a contract could have written for a clone whose stored origin is *stored*.
+
+    As it stands, when the contract's own url carried the credential; or without the user part
+    of its authority, which is what the engine added for ``auth``. A token can contain ``@``,
+    so that user part ends at the first ``@`` or at the last one: both are tried.
+    """
+    match = _AUTHORITY.match(stored)
+    if match is None or "@" not in match.group(2):
+        return [stored]
+    scheme, authority, rest = match.group(1), match.group(2), stored[match.end() :]
+    return [
+        stored,
+        scheme + authority.partition("@")[2] + rest,
+        scheme + authority.rpartition("@")[2] + rest,
+    ]
 
 
 def _made_with_a_token_in_the_url(url_dir: Path, entry: Path) -> bool:
     """True for a clone that an earlier version of this engine made with a token in its url.
 
     Such a clone holds credentials in its git config, and its url directory is the digest of
-    that url without them: the key every source had before one with ``auth`` got a key of its
-    own. A clone of anyone else's that holds a credentialed url is not named like that, so it is
-    never taken for one. A link is not a clone.
+    the url the contract wrote, the key every source had before one with ``auth`` got a key of
+    its own. That url is the stored one without the credential the engine added for ``auth``, or
+    the stored one as it stands when the contract's own url carried the credential. A clone of
+    anyone else's that holds a credentialed url is not named like that, so it is never taken
+    for one. A link is not a clone.
     """
     if _linked(entry) is not None or not entry.is_dir():
         return False
-    return any(_digest(_without_user(url)) == url_dir.name for url in _stored_credentials(entry))
+    return any(
+        url_dir.name == _digest(candidate)
+        for stored in _stored_credentials(entry)
+        for candidate in _contract_urls(stored)
+    )
 
 
 def _sweep_entry(url_dir: Path, path: Path, now: float) -> None:
@@ -806,7 +824,11 @@ def _sweep_leftovers(keep: Optional[Path] = None) -> None:
       refused.
 
     The entry in *keep*, the one this run is about to use, is left to
-    :func:`_drop_stored_credentials`.
+    :func:`_drop_stored_credentials`. One race remains, once, after an upgrade: while a run
+    cleans a clone that an earlier version left with a token in its url, a run of another
+    source can sweep that clone away (or two runs can clean it at once). The run that loses it
+    fails (a missing file or a git error); nothing else is lost, because this is a cache and the
+    next run fetches the clone again.
     """
     git_cache = cache_root() / "git"
     try:
@@ -842,6 +864,7 @@ _AUTH_URL = re.compile(
 )
 _CONFIG_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"']+", re.IGNORECASE)
 _USERINFO = re.compile(r"([a-z][a-z0-9+.-]*)://([^/?#@]*)@", re.IGNORECASE)
+_AUTHORITY = re.compile(r"([a-z][a-z0-9+.-]*://)([^/?#]*)", re.IGNORECASE)
 
 
 def _stored_credentials(cache_dir: Path) -> List[str]:
