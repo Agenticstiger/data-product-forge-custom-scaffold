@@ -9,7 +9,9 @@
 # publisher must be configured at
 # https://pypi.org/manage/project/data-product-forge-custom-scaffold/settings/publishing/
 # with: owner=Agenticstiger, repo=data-product-forge-custom-scaffold,
-# workflow filename=release.yml.
+# workflow filename=release.yml, environment=pypi. Fill in the environment name: it is what
+# keeps a token minted anywhere but the `publish-pypi` job from being accepted (see the
+# comment on `permissions` below).
 
 name: Release
 
@@ -24,10 +26,35 @@ on:
         required: true
         type: string
 
+# Least privilege, granted per job rather than to the whole file.
+#
+# This block used to read `contents: write` + `id-token: write` +
+# `attestations: write`, and only one of the four jobs narrowed it. Under GitHub
+# Actions' inheritance rules a job with no `permissions:` block of its own receives
+# the whole workflow-level grant, so `quality-gate`, `build` and `github-release` were
+# all handed `id-token: write` — the ability to mint an OIDC token — though none of them
+# needs one. Only `publish-pypi` does, for PyPI trusted publishing, and it already scopes
+# itself.
+#
+# Why that matters more here than in an ordinary repository: an OIDC token minted
+# anywhere in this workflow may be accepted by PyPI as proof of identity for
+# data-product-forge-custom-scaffold. So any step in `quality-gate`, `build` or
+# `github-release` — including a third-party action reached through a floating tag —
+# could request one and publish, without ever entering the job that is supposed to be the
+# only publisher. The `environment: pypi` claim on `publish-pypi` blocks this ONLY IF the
+# trusted-publisher configuration on PyPI also pins that environment name; if that field is
+# blank there, nothing distinguishes a token minted in `build` from the real one. That
+# setting lives on pypi.org and cannot be read from here, so this workflow does not depend
+# on it.
+#
+# `attestations: write` is dropped outright. Nothing in this file uses it: PyPI
+# attestations are made by the publish action from the OIDC token, which needs only
+# `id-token: write`.
+#
+# The default is now read-only, so a job added later without its own block gets the
+# safe end of the mistake rather than the dangerous one.
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 env:
   PYTHON_VERSION: "3.12"
@@ -37,6 +64,11 @@ jobs:
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
+    # Lints, tests and reads the version out of pyproject.toml. Checkout is the only thing
+    # here that touches the token. Explicit rather than inherited: the defect being fixed
+    # was a job silently receiving more than it asked for.
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.meta.outputs.version }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
@@ -84,6 +116,12 @@ jobs:
     name: Build Package
     needs: quality-gate
     runs-on: ubuntu-latest
+    # Builds the sdist and wheel and uploads them as a run artifact. Artifact upload uses the
+    # Actions runtime token, not GITHUB_TOKEN, so it needs no grant here: `publish-pypi` below
+    # declares only `id-token: write`, which leaves it `contents: none`, and its
+    # actions/download-artifact step has succeeded in every release so far.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -126,6 +164,11 @@ jobs:
     name: GitHub Release
     needs: [quality-gate, build]
     runs-on: ubuntu-latest
+    # The one job that legitimately writes: softprops/action-gh-release creates the release
+    # and uploads the dist files to it. It gets `contents: write` and nothing else, in
+    # particular no `id-token: write`, which it was inheriting before.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:

@@ -25,6 +25,7 @@ import pytest
 from data_product_forge_custom_scaffold.resolvers import git as git_resolver
 from data_product_forge_custom_scaffold.resolvers.base import ResolutionError
 from data_product_forge_custom_scaffold.resolvers.git import GitResolver
+from tests.helpers import unfinished_clone
 
 TOKEN = "s3cret-token-value"
 URL = "https://example.invalid/org/repo"
@@ -234,6 +235,63 @@ def test_a_clone_that_holds_a_credential_is_deleted_only_if_it_is_named_for_its_
 
     assert not ours.exists()
     assert not_named_for_it.exists() and other_url.exists()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://T@example.invalid/org/repo",  # the token as the user name
+        "https://u:T@example.invalid/org/repo",
+        "ssh://git:T@example.invalid/org/repo",
+    ],
+)
+def test_a_clone_whose_own_url_carried_the_credential_is_swept_too(
+    git_cache: Path, monkeypatch, url: str
+) -> None:
+    # 0.1.0 to 0.4.1 accepted a contract whose url itself carried the credential. The clone's
+    # origin is that url as written, so its url directory is the digest of the url with the
+    # credential in it, not without.
+    clone = unfinished_clone(url, url)
+
+    _sweep(monkeypatch)
+
+    assert not clone.exists()
+
+
+def test_a_clone_made_for_auth_on_a_url_that_had_a_user_part_is_swept(
+    git_cache: Path, monkeypatch
+) -> None:
+    # The engine added `x-access-token:<token>@` in front of the rest of the url, so the
+    # stored origin has two user parts; the directory is named for the url the contract wrote.
+    url = "https://u@example.invalid/org/repo"
+    clone = unfinished_clone("https://x-access-token:T@u@example.invalid/org/repo", url)
+
+    _sweep(monkeypatch)
+
+    assert not clone.exists()
+
+
+def test_a_clone_made_with_a_token_that_contains_an_at_sign_is_swept(
+    git_cache: Path, monkeypatch
+) -> None:
+    # git takes the last `@` of the authority as the end of the user part, so such a token
+    # works, and the stored origin has the engine's user part ending at the last `@`.
+    clone = unfinished_clone("https://x-access-token:abc@def@example.invalid/org/repo", URL)
+
+    _sweep(monkeypatch)
+
+    assert not clone.exists()
+
+
+def test_a_credentialed_origin_that_matches_neither_form_of_the_directory_name_stays(
+    git_cache: Path, monkeypatch
+) -> None:
+    url = "https://T@example.invalid/org/repo"
+    clone = unfinished_clone("https://T@example.invalid/org/another", url)
+
+    _sweep(monkeypatch)
+
+    assert clone.exists()  # somebody else's repository that happens to hold a token
 
 
 @pytest.mark.parametrize("name", ["myorg", "0123456789ABCDEF", "0123456789abcde", "x" * 16])

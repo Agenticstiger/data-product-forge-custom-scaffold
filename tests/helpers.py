@@ -14,6 +14,7 @@ from fluid_sdk import CustomScaffold
 
 from data_product_forge_custom_scaffold import cli
 from data_product_forge_custom_scaffold.engine import Engine
+from data_product_forge_custom_scaffold.resolvers.git import GitResolver
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SECRET = "sk-live-supersecret-do-not-leak"
@@ -206,3 +207,15 @@ def git_that_fails(
         raise subprocess.CalledProcessError(returncode, args, stderr=stderr)
 
     return respond
+
+
+def unfinished_clone(origin: str, url: str, ref: str = "v1") -> Path:
+    """The cache directory for (*url*, *ref*), made as a repository with a config and no commit.
+
+    Its ``origin`` is *origin*. That is what a run killed mid-transfer leaves, and what an
+    earlier version left when it cloned with a credential in the url.
+    """
+    cache_dir = GitResolver._cache_dir_for(url, ref)
+    (cache_dir / ".git").mkdir(parents=True)
+    (cache_dir / ".git" / "config").write_text(f'[remote "origin"]\n\turl = {origin}\n')
+    return cache_dir

@@ -100,7 +100,8 @@ The rules, all enforced before git runs:
   `host`, or `host:port` for a port other than 443). Unset, a source with `auth` is refused and
   no token is sent anywhere.
 - `secret_ref` must start with `FLUID_SCAFFOLD_`. To allow other names, list prefixes in
-  `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated).
+  `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated, each at least four characters and
+  none starting with `GIT_`; anything else refuses every git source, naming the entry).
 - `auth` goes only with an `https://host[:port]/path` url (a plain ASCII host name; no user,
   brackets, escapes, backslashes, query or fragment). A `url` that carries credentials, or any
   user part (`https://alice@host/...`, not only `https://user:token@host/...`), is refused: a

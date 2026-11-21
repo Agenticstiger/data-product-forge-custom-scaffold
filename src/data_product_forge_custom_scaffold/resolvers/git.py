@@ -19,7 +19,8 @@ for a credential; where it may go is decided by the operator, outside the contra
   is refused.
 * ``secret_ref`` must start with ``FLUID_SCAFFOLD_`` or with a prefix in
   ``FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES`` (comma-separated), so a contract cannot name any
-  other variable.
+  other variable. An operator prefix must be at least four characters and must not start with
+  ``GIT_``; any other entry refuses every git source with an error that names it.
 * ``auth`` goes only with an ``https://`` url, and a url that carries credentials, or any
   user part (``https://user:token@host/...``), is refused: it would end up in the lock.
 
@@ -98,6 +99,7 @@ _AUTH_HOSTS = "FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS"  # hosts a credential may be se
 _SECRET_PREFIXES = "FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES"  # variable-name prefixes, besides:
 _DEFAULT_SECRET_PREFIX = "FLUID_SCAFFOLD_"
 _MIN_GIT = (2, 31)  # GIT_CONFIG_COUNT, which carries the credential without a command line
+_MIN_PREFIX = 4  # the shortest operator prefix: a shorter one matches ordinary variables
 
 # What a killed run leaves beside a clone: the directory it was building, and the one it was
 # replacing or deleting. A leftover that changed less than a day ago may be a live run's.
@@ -153,17 +155,13 @@ def _git_env(url: str = "", credential: Optional["_Credential"] = None) -> Dict[
 
     A variable whose name starts with a prefix a contract may name (``FLUID_SCAFFOLD_`` and the
     operator's, see :func:`_secret_prefixes`) is left out: a token reaches git as the header
-    below and in no other way, not in the environment of git and of the helpers it starts. git's
-    own ``GIT_*`` variables are never left out.
+    below and in no other way, not in the environment of git and of the helpers it starts. No
+    such prefix can match one of git's own ``GIT_*`` variables, so git keeps all of those.
 
     A *credential* is added last, as config in the environment (never on a command line).
     """
     prefixes = _secret_prefixes()
-    env = {
-        name: value
-        for name, value in os.environ.items()
-        if name.startswith("GIT_") or not name.startswith(prefixes)
-    }
+    env = {name: value for name, value in os.environ.items() if not name.startswith(prefixes)}
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
     if _effective_url(url, env).startswith(_SSH_PREFIXES) and not _ssh_command_chosen(env):
         env["GIT_SSH_COMMAND"] = _SSH_BATCH_MODE
@@ -441,6 +439,7 @@ class GitResolver(Resolver):
 def _validated(source: Mapping[str, Any]) -> Tuple[str, str, str, Optional["_AuthBinding"]]:
     """The url, ref and subdir of a git source, and the credential it asks for, once everything
     the engine refuses has been refused (before anything is cached or fetched)."""
+    _secret_prefixes()  # a setting that would break git's environment is refused up front
     url = source.get("url")
     ref = source.get("ref")
     if not url:
@@ -543,8 +542,29 @@ def _allowed_endpoints() -> Set[str]:
 
 
 def _secret_prefixes() -> Tuple[str, ...]:
-    """The name prefixes a contract may ask for: the default, and the operator's."""
-    return (_DEFAULT_SECRET_PREFIX, *_csv(os.environ.get(_SECRET_PREFIXES, "")))
+    """The name prefixes a contract may ask for: the default, and the operator's.
+
+    Every variable under one of them is a secret: a contract may name it, and git never sees
+    it (see :func:`_git_env`). So an operator entry that is shorter than four characters is an
+    error, because it would also match ordinary variables (``P`` is ``PATH`` and ``PWD``), and
+    so is one that starts with ``GIT_``, because that is git's own namespace, whose variables
+    git must keep. Longer than that is the operator's own care: an entry that is the name of an
+    ordinary variable (``PATH``) still drops it from git's environment, and lets a contract name
+    it, so choose a specific prefix.
+    """
+    extra = _csv(os.environ.get(_SECRET_PREFIXES, ""))
+    for prefix in extra:
+        if len(prefix) < _MIN_PREFIX:
+            raise ResolutionError(
+                f"{_SECRET_PREFIXES} entry {prefix!r} is shorter than {_MIN_PREFIX} characters: "
+                f"it would also match ordinary variables such as PATH"
+            )
+        if prefix.startswith("GIT_"):
+            raise ResolutionError(
+                f"{_SECRET_PREFIXES} entry {prefix!r} starts with GIT_, which is git's own "
+                f"namespace: its variables are never taken away from git"
+            )
+    return (_DEFAULT_SECRET_PREFIX, *extra)
 
 
 def _bind_auth(url: str, auth: Any) -> Optional[_AuthBinding]:
@@ -757,23 +777,41 @@ def _last_changed(path: Path) -> float:
     return max(stat.st_mtime, stat.st_ctime)
 
 
-def _without_user(url: str) -> str:
-    """*url* with the user part of its authority removed: the url its cache key was made from."""
-    match = _USERINFO.match(url)
-    return f"{match.group(1)}://{url[match.end():]}" if match else url
+def _contract_urls(stored: str) -> List[str]:
+    """The urls a contract could have written for a clone whose stored origin is *stored*.
+
+    As it stands, when the contract's own url carried the credential; or without the user part
+    of its authority, which is what the engine added for ``auth``. A token can contain ``@``,
+    so that user part ends at the first ``@`` or at the last one: both are tried.
+    """
+    match = _AUTHORITY.match(stored)
+    if match is None or "@" not in match.group(2):
+        return [stored]
+    scheme, authority, rest = match.group(1), match.group(2), stored[match.end() :]
+    return [
+        stored,
+        scheme + authority.partition("@")[2] + rest,
+        scheme + authority.rpartition("@")[2] + rest,
+    ]
 
 
 def _made_with_a_token_in_the_url(url_dir: Path, entry: Path) -> bool:
     """True for a clone that an earlier version of this engine made with a token in its url.
 
     Such a clone holds credentials in its git config, and its url directory is the digest of
-    that url without them: the key every source had before one with ``auth`` got a key of its
-    own. A clone of anyone else's that holds a credentialed url is not named like that, so it is
-    never taken for one. A link is not a clone.
+    the url the contract wrote, the key every source had before one with ``auth`` got a key of
+    its own. That url is the stored one without the credential the engine added for ``auth``, or
+    the stored one as it stands when the contract's own url carried the credential. A clone of
+    anyone else's that holds a credentialed url is not named like that, so it is never taken
+    for one. A link is not a clone.
     """
     if _linked(entry) is not None or not entry.is_dir():
         return False
-    return any(_digest(_without_user(url)) == url_dir.name for url in _stored_credentials(entry))
+    return any(
+        url_dir.name == _digest(candidate)
+        for stored in _stored_credentials(entry)
+        for candidate in _contract_urls(stored)
+    )
 
 
 def _sweep_entry(url_dir: Path, path: Path, now: float) -> None:
@@ -806,7 +844,11 @@ def _sweep_leftovers(keep: Optional[Path] = None) -> None:
       refused.
 
     The entry in *keep*, the one this run is about to use, is left to
-    :func:`_drop_stored_credentials`.
+    :func:`_drop_stored_credentials`. One race remains, once, after an upgrade: while a run
+    cleans a clone that an earlier version left with a token in its url, a run of another
+    source can sweep that clone away (or two runs can clean it at once). The run that loses it
+    fails (a missing file or a git error); nothing else is lost, because this is a cache and the
+    next run fetches the clone again.
     """
     git_cache = cache_root() / "git"
     try:
@@ -842,6 +884,7 @@ _AUTH_URL = re.compile(
 )
 _CONFIG_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"']+", re.IGNORECASE)
 _USERINFO = re.compile(r"([a-z][a-z0-9+.-]*)://([^/?#@]*)@", re.IGNORECASE)
+_AUTHORITY = re.compile(r"([a-z][a-z0-9+.-]*://)([^/?#]*)", re.IGNORECASE)
 
 
 def _stored_credentials(cache_dir: Path) -> List[str]:
