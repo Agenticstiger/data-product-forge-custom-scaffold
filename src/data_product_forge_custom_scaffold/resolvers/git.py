@@ -10,11 +10,13 @@ Source shape::
       "auth": { "secret_ref": "GITHUB_TOKEN" }  # optional
     }
 
-Auth: ``secret_ref`` names an environment variable holding the token.
-The token is injected into the clone URL as ``https://<token>@host/repo``. It is
-never logged and is not left on disk: a branch or tag clone has its remote URL
-reset to the credential-free URL straight after the clone (``git clone`` records
-the URL it was given), and a commit pin passes the URL inline to ``git fetch``.
+Auth: ``secret_ref`` names an environment variable holding the token. It goes into
+the URL ``https://x-access-token:<token>@host/repo`` that is handed to ``git fetch``,
+never to ``git clone``: ``clone`` records the URL it was given as ``origin`` in
+``.git/config`` before it transfers anything, so a run killed mid-transfer would leave
+the token in the cache. ``fetch <url>`` records no remote, so the token is not written
+to the cache (git strips it from FETCH_HEAD) and it is never logged. A cached clone
+that does carry credentials, made by an earlier version, is cleaned before it is reused.
 
 git never prompts on the terminal for a credential (``GIT_TERMINAL_PROMPT=0``
 unless the caller sets it), so a library call cannot hang waiting for input.
@@ -224,12 +226,10 @@ class GitResolver(Resolver):
             clone_url = self._inject_token(url, token)
 
         try:
-            if _looks_like_full_sha(ref):
-                self._fetch_sha_into_cache(clone_url, ref, cache_dir, url)
+            if _looks_like_full_sha(ref) or clone_url != url:
+                self._fetch_into_cache(clone_url, ref, cache_dir, url)
             else:
                 self._clone_ref_into_cache(clone_url, ref, cache_dir, url)
-                if clone_url != url:
-                    self._scrub_token(cache_dir, clone_url, url)
         except BaseException:
             # An empty or half-made directory must not stay for a later run to reuse as if
             # it were a finished clone. This covers an interrupt (``KeyboardInterrupt``)
@@ -282,27 +282,32 @@ class GitResolver(Resolver):
             what=f"clone {_sanitise_url(url)}@{ref}",
         )
 
-    def _fetch_sha_into_cache(self, clone_url: str, ref: str, cache_dir: Path, url: str) -> None:
-        # ``git clone --branch`` rejects raw commit ids, so initialise an empty
-        # repo and fetch the commit directly (the robherley/shallow-fetch-sha
-        # idiom). The URL is passed INLINE to ``git fetch`` — never via
-        # ``git remote add`` — so the token is not persisted to .git/config.
+    def _fetch_into_cache(self, clone_url: str, ref: str, cache_dir: Path, url: str) -> None:
+        # ``git init`` + ``git fetch <url>`` + ``git checkout``: for a commit id (``git clone
+        # --branch`` rejects raw commit ids; the robherley/shallow-fetch-sha idiom) and for a
+        # branch or tag that needs a token. ``git clone <url>`` records the URL, token
+        # included, as ``origin`` in .git/config before it transfers anything, so a run
+        # killed mid-transfer would leave the token on disk. ``git fetch <url>`` records no
+        # remote: the token only ever lives in the arguments of this process. ``--`` keeps
+        # a ref that looks like an option (``--upload-pack=...``) a ref.
+        where = f"{_sanitise_url(url)}@{ref}"
+        fetch = ["-C", str(cache_dir), "fetch", "--depth", "1", "--", clone_url, ref]
         self._git(["init", "-q", str(cache_dir)], clone_url=clone_url, url=url, what="git init")
 
-        # Fast path: shallow-fetch just the pinned commit. Needs the server to
-        # allow fetching a reachable sha (uploadpack.allowReachableSHA1InWant —
-        # GitHub / GitLab / Bitbucket support it).
-        if self._git_ok(["-C", str(cache_dir), "fetch", "--depth", "1", clone_url, ref], url=url):
-            target = "FETCH_HEAD"
-        else:
-            # Fallback for servers that disallow fetch-by-sha (mirrors
-            # cookiecutter's vcs.clone + copier's --vcs-ref: a full fetch, then
-            # check the commit out locally). Still inline-URL, so no token on disk.
+        target = "FETCH_HEAD"
+        if not _looks_like_full_sha(ref):
+            self._git(fetch, clone_url=clone_url, url=url, what=f"fetch {where}")
+        elif not self._git_ok(fetch, url=url):
+            # A commit id: the shallow fetch of just that commit needs the server to allow
+            # fetching a reachable sha (uploadpack.allowReachableSHA1InWant, which GitHub,
+            # GitLab and Bitbucket do). Fallback for servers that do not (mirrors
+            # cookiecutter's vcs.clone + copier's --vcs-ref): a full fetch, then check the
+            # commit out locally. Still a URL fetch, so no token on disk.
             self._git(
                 ["-C", str(cache_dir), "fetch", clone_url, "+refs/heads/*:refs/remotes/origin/*"],
                 clone_url=clone_url,
                 url=url,
-                what=f"fetch {_sanitise_url(url)}@{ref}",
+                what=f"fetch {where}",
             )
             target = ref
 
@@ -310,7 +315,7 @@ class GitResolver(Resolver):
             ["-C", str(cache_dir), "checkout", "-q", target],
             clone_url=clone_url,
             url=url,
-            what=f"checkout {_sanitise_url(url)}@{ref}",
+            what=f"checkout {where}",
         )
 
     @staticmethod

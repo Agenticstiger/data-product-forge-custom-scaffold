@@ -1,8 +1,9 @@
-"""git subprocess hardening: never prompt for a credential, never keep the token.
+"""git subprocess hardening: never prompt for a credential, never leave half a clone.
 
-A library call in a non-interactive job must not hang on a credential prompt, and a
-token injected into a clone URL must not stay in the cache's ``.git/config`` (git
-records the URL a clone was given as the remote).
+A library call in a non-interactive job must not hang on a credential prompt, and a fetch
+that fails or is interrupted must not leave a directory the next run takes for a clone.
+(Where a token may be written is covered by ``test_git_token_flow.py`` and
+``test_git_cached_credentials.py``.)
 """
 
 from __future__ import annotations
@@ -56,56 +57,17 @@ def test_an_explicit_prompt_setting_is_respected(monkeypatch) -> None:
     assert seen[0]["env"]["GIT_TERMINAL_PROMPT"] == "1"
 
 
-def _recording_git(monkeypatch, cache: Path, *, fail_on: str = "") -> List[List[str]]:
-    """Stub GitResolver._git: record the arguments and create the clone directory."""
+def test_a_source_with_no_token_is_cloned_and_nothing_else(monkeypatch, tmp_path: Path) -> None:
     calls: List[List[str]] = []
+    monkeypatch.setattr(
+        GitResolver,
+        "_git",
+        staticmethod(lambda args, *, clone_url, url, what: calls.append(list(args))),
+    )
 
-    def fake_git(args, *, clone_url, url, what):
-        calls.append(list(args))
-        if args[0] == "clone":
-            cache.mkdir(parents=True)
-        if fail_on and fail_on in args:
-            raise ResolutionError("git failed")
+    GitResolver()._clone_into_cache(PLAIN_URL, "v1", tmp_path / "clone", {})
 
-    monkeypatch.setattr(GitResolver, "_git", staticmethod(fake_git))
-    return calls
-
-
-def test_a_branch_clone_with_a_token_resets_the_remote_to_the_plain_url(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("DPF_TEST_TOKEN", TOKEN)
-    cache = tmp_path / "cache" / "clone"
-    calls = _recording_git(monkeypatch, cache)
-
-    GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {"secret_ref": "DPF_TEST_TOKEN"})
-
-    assert calls[0][:5] == ["clone", "--depth", "1", "--branch", "v1"]
-    assert TOKEN in calls[0][5]  # the clone itself needs it
-    assert calls[1] == ["-C", str(cache), "remote", "set-url", "origin", PLAIN_URL]
-    assert TOKEN not in " ".join(calls[1])
-
-
-def test_a_clone_without_a_token_is_not_rewritten(monkeypatch, tmp_path: Path) -> None:
-    cache = tmp_path / "cache" / "clone"
-    calls = _recording_git(monkeypatch, cache)
-
-    GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {})
-
-    assert [c[0] for c in calls] == ["clone"]
-
-
-def test_a_failed_scrub_deletes_the_clone_instead_of_keeping_the_token(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("DPF_TEST_TOKEN", TOKEN)
-    cache = tmp_path / "cache" / "clone"
-    _recording_git(monkeypatch, cache, fail_on="set-url")
-
-    with pytest.raises(ResolutionError):
-        GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {"secret_ref": "DPF_TEST_TOKEN"})
-
-    assert not cache.exists()
+    assert [call[0] for call in calls] == ["clone"]
 
 
 @pytest.mark.parametrize("failure", [ResolutionError("git failed"), KeyboardInterrupt()])
