@@ -17,16 +17,22 @@ never to ``git clone``: ``clone`` records the URL it was given as ``origin`` in
 the token in the cache. ``fetch <url>`` records no remote, so the token is not written
 to the cache (git strips it from FETCH_HEAD) and it is never logged. A cached clone
 that does carry credentials, made by an earlier version, is cleaned before it is reused.
+A branch or tag is looked up the way ``git clone --branch`` looks it up, with or without
+a token: ``refs/heads/<ref>`` first, then ``refs/tags/<ref>``.
 
 git never prompts on the terminal for a credential (``GIT_TERMINAL_PROMPT=0``
 unless the caller sets it), so a library call cannot hang waiting for input.
 
 ssh never waits for an answer either. An ssh URL runs with
 ``GIT_SSH_COMMAND=ssh -o BatchMode=yes``, so a key passphrase or an unknown host key is
-an error, not a hang. The default is left out when the caller has chosen an ssh command
-(``GIT_SSH_COMMAND`` or ``GIT_SSH`` in the environment, or ``core.sshCommand`` in git
-config): git gives ``GIT_SSH_COMMAND`` priority over the other two, so setting it
-blindly would switch off a deploy key configured through either.
+an error, not a hang. The default is left out whenever the caller could be choosing the
+ssh command: ``GIT_SSH_COMMAND`` or ``GIT_SSH`` in the environment, a ``core.sshCommand``
+in git config, or any ``include`` / ``includeIf`` directive (an include can set
+``core.sshCommand`` for one host or one directory, and only git can say whether it
+applies). git gives ``GIT_SSH_COMMAND`` priority over the other two, so setting it
+blindly would switch off a deploy key configured through either. The configuration is
+read outside any repository, because the commands run here never read the current
+directory's own config.
 
 Cache layout::
 
@@ -36,6 +42,11 @@ Subsequent fetches with the same ``url`` + ``ref`` reuse the cache. To
 force a re-fetch, delete the cache dir or set
 ``FLUID_CUSTOM_SCAFFOLD_NOCACHE=1``.
 
+A clone is built in a ``.partial-*`` directory beside its final place and renamed into it
+when it is whole, so a directory under ``<urlhash>/<ref>`` is a finished clone even if the
+run is killed outright. A killed run leaves only the ``.partial-*`` directory, which holds
+no token and can be deleted.
+
 Shells out to the ``git`` binary — no Python gitpython dependency.
 """
 
@@ -44,8 +55,10 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -65,11 +78,13 @@ _FULL_SHA_RE = re.compile(r"\A(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _SSH_BATCH_MODE = "ssh -o BatchMode=yes"
 _SSH_PREFIXES = ("ssh://", "git+ssh://", "git@")
 
-# What ssh prints when BatchMode turned a prompt into a failure.
-_PROMPT_FAILURES = ("Host key verification failed", "Permission denied")
+# What ssh prints when BatchMode turned a prompt into a failure. ssh writes "Permission
+# denied (publickey)."; a file-system error says "Permission denied" without the bracket.
+_PROMPT_FAILURES = ("Host key verification failed", "Permission denied (")
 _BATCH_MODE_HINT = (
-    "ssh ran without prompts (-o BatchMode=yes). Add the host to known_hosts or load the "
-    "key into ssh-agent, or set GIT_SSH_COMMAND (for example to 'ssh') to choose how ssh runs."
+    "ssh ran without prompts (-o BatchMode=yes), so it cannot ask for a passphrase or "
+    "confirm a host key. Add the host to known_hosts or load the key into ssh-agent, or set "
+    "GIT_SSH_COMMAND (for example to 'ssh') to choose how ssh runs."
 )
 
 
@@ -92,21 +107,27 @@ def _git_env(url: str = "") -> Dict[str, str]:
 
 
 def _ssh_command_chosen(env: Mapping[str, str]) -> bool:
-    """True when the caller has picked the ssh command, by any of git's three routes.
+    """True when the caller could be choosing the ssh command, by any route git offers.
 
     git uses ``GIT_SSH_COMMAND`` first, then ``core.sshCommand``, then ``GIT_SSH``
     (connect.c), so a default ``GIT_SSH_COMMAND`` would override the other two. The
-    environment variables are checked by presence, as ``setdefault`` would;
-    ``core.sshCommand`` is read from git's own configuration.
+    environment variables count by presence, as ``setdefault`` would. In git's
+    configuration a ``core.sshCommand`` counts, and so does any ``include`` or
+    ``includeIf``: an include can set it for one host or one directory and only git can say
+    whether it applies, so an include means "do not guess". The configuration is read from
+    a directory outside any repository: the commands run here read the cache clone's own
+    config, or none, never the current directory's.
     """
     if "GIT_SSH_COMMAND" in env or "GIT_SSH" in env:
         return True
     try:
         probe = subprocess.run(
-            ["git", "config", "--get", "core.sshCommand"],
+            ["git", "config", "--get-regexp", r"^(core\.sshcommand|include\.|includeif\.)"],
             capture_output=True,
             text=True,
+            errors="replace",
             env=dict(env),
+            cwd=tempfile.gettempdir(),
         )
     except OSError:  # no git binary: the command that needs it says so
         return False
@@ -206,11 +227,6 @@ class GitResolver(Resolver):
         cache_dir: Path,
         auth: Mapping[str, Any],
     ) -> None:
-        # Fresh clone — wipe any partial directory.
-        if cache_dir.exists():
-            shutil.rmtree(cache_dir)
-        cache_dir.parent.mkdir(parents=True, exist_ok=True)
-
         clone_url = url
         secret_ref = auth.get("secret_ref") if isinstance(auth, Mapping) else None
         if secret_ref:
@@ -225,28 +241,31 @@ class GitResolver(Resolver):
                 )
             clone_url = self._inject_token(url, token)
 
+        # Build the clone beside its final place and move it in when it is whole, so a
+        # killed run leaves a ``.partial-*`` directory, never a half-made cache directory
+        # for the next run to reuse. An older clone stays until the new one is ready.
+        cache_dir.parent.mkdir(parents=True, exist_ok=True)
+        staging = cache_dir.parent / f".partial-{secrets.token_hex(8)}"
         try:
             if _looks_like_full_sha(ref) or clone_url != url:
-                self._fetch_into_cache(clone_url, ref, cache_dir, url)
+                self._fetch_into_cache(clone_url, ref, staging, url)
             else:
-                self._clone_ref_into_cache(clone_url, ref, cache_dir, url)
-        except BaseException:
-            # An empty or half-made directory must not stay for a later run to reuse as if
-            # it were a finished clone. This covers an interrupt (``KeyboardInterrupt``)
-            # too, not only a failed git command.
-            shutil.rmtree(cache_dir, ignore_errors=True)
+                self._clone_ref_into_cache(clone_url, ref, staging, url)
+            _publish(staging, cache_dir)
+        except BaseException:  # an interrupt too, not only a failed git command
+            shutil.rmtree(staging, ignore_errors=True)
             raise
 
-    def _clone_ref_into_cache(self, clone_url: str, ref: str, cache_dir: Path, url: str) -> None:
+    def _clone_ref_into_cache(self, clone_url: str, ref: str, target: Path, url: str) -> None:
         # Branch or tag: a shallow ``--branch`` clone is the cheapest path.
         self._git(
-            ["clone", "--depth", "1", "--branch", ref, clone_url, str(cache_dir)],
+            ["clone", "--depth", "1", "--branch", ref, clone_url, str(target)],
             clone_url=clone_url,
             url=url,
             what=f"clone {_sanitise_url(url)}@{ref}",
         )
 
-    def _fetch_into_cache(self, clone_url: str, ref: str, cache_dir: Path, url: str) -> None:
+    def _fetch_into_cache(self, clone_url: str, ref: str, target: Path, url: str) -> None:
         # ``git init`` + ``git fetch <url>`` + ``git checkout``: for a commit id (``git clone
         # --branch`` rejects raw commit ids; the robherley/shallow-fetch-sha idiom) and for a
         # branch or tag that needs a token. ``git clone <url>`` records the URL, token
@@ -255,28 +274,38 @@ class GitResolver(Resolver):
         # remote: the token only ever lives in the arguments of this process. ``--`` keeps
         # a ref that looks like an option (``--upload-pack=...``) a ref.
         where = f"{_sanitise_url(url)}@{ref}"
-        fetch = ["-C", str(cache_dir), "fetch", "--depth", "1", "--", clone_url, ref]
-        self._git(["init", "-q", str(cache_dir)], clone_url=clone_url, url=url, what="git init")
+        self._git(["init", "-q", str(target)], clone_url=clone_url, url=url, what="git init")
 
-        target = "FETCH_HEAD"
-        if not _looks_like_full_sha(ref):
-            self._git(fetch, clone_url=clone_url, url=url, what=f"fetch {where}")
-        elif not self._git_ok(fetch, url=url):
-            # A commit id: the shallow fetch of just that commit needs the server to allow
-            # fetching a reachable sha (uploadpack.allowReachableSHA1InWant, which GitHub,
-            # GitLab and Bitbucket do). Fallback for servers that do not (mirrors
-            # cookiecutter's vcs.clone + copier's --vcs-ref): a full fetch, then check the
-            # commit out locally. Still a URL fetch, so no token on disk.
+        def fetch(name: str) -> List[str]:
+            return ["-C", str(target), "fetch", "--depth", "1", "--", clone_url, name]
+
+        checkout = "FETCH_HEAD"
+        if _looks_like_full_sha(ref):
+            if not self._git_ok(fetch(ref), url=url):
+                # The shallow fetch of just that commit needs the server to allow fetching
+                # a reachable sha (uploadpack.allowReachableSHA1InWant, which GitHub,
+                # GitLab and Bitbucket do). Fallback for servers that do not (mirrors
+                # cookiecutter's vcs.clone + copier's --vcs-ref): a full fetch, then check
+                # the commit out locally. Still a URL fetch, so no token on disk.
+                self._git(
+                    ["-C", str(target), "fetch", clone_url, "+refs/heads/*:refs/remotes/origin/*"],
+                    clone_url=clone_url,
+                    url=url,
+                    what=f"fetch {where}",
+                )
+                checkout = ref
+        elif not self._git_ok(fetch(f"refs/heads/{ref}"), url=url):
+            # The lookup ``git clone --branch`` does: a branch first, then a tag. If the
+            # first fetch failed for another reason (auth, network) the second says so.
             self._git(
-                ["-C", str(cache_dir), "fetch", clone_url, "+refs/heads/*:refs/remotes/origin/*"],
+                fetch(f"refs/tags/{ref}"),
                 clone_url=clone_url,
                 url=url,
-                what=f"fetch {where}",
+                what=f"fetch {where} (as a branch, then as a tag)",
             )
-            target = ref
 
         self._git(
-            ["-C", str(cache_dir), "checkout", "-q", target],
+            ["-C", str(target), "checkout", "-q", checkout],
             clone_url=clone_url,
             url=url,
             what=f"checkout {where}",
@@ -288,14 +317,17 @@ class GitResolver(Resolver):
         env = _git_env(url)
         try:
             subprocess.run(["git", *args], check=True, capture_output=True, text=True, env=env)
+            return
         except FileNotFoundError as e:
             raise ResolutionError("git resolver requires the 'git' binary on PATH") from e
         except subprocess.CalledProcessError as e:
-            # Hide the token from any error output before re-raising.
+            # Hide the token from any error output. The error is raised below, outside this
+            # handler, so the CalledProcessError (its argv holds the token) is not kept as
+            # the new error's __context__.
             detail = (e.stderr or "").replace(clone_url, _sanitise_url(url)).strip()
-            if _batch_mode_blocked(detail, env):
-                detail += "\n" + _BATCH_MODE_HINT
-            raise ResolutionError(f"git {what} failed: {detail}") from None
+        if _batch_mode_blocked(detail, env):
+            detail += "\n" + _BATCH_MODE_HINT
+        raise ResolutionError(f"git {what} failed: {detail}")
 
     @staticmethod
     def _git_ok(args: List[str], *, url: str = "") -> bool:
@@ -329,27 +361,51 @@ class GitResolver(Resolver):
 
 
 def _safe_ref(ref: str) -> str:
-    """Sanitise a ref name for use as a cache directory."""
-    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in ref)
+    """Sanitise a ref name for use as a cache directory name.
+
+    Dots stay (``v1.2.0``), but a name made only of dots (``.``, ``..``) would name the
+    url's directory or its parent instead of a directory inside it, so it becomes
+    underscores.
+    """
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in ref)
+    return safe if safe.strip(".") else "_" * max(len(safe), 1)
+
+
+def _publish(staging: Path, cache_dir: Path) -> None:
+    """Move a finished clone into place; an older clone is replaced only now."""
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+    try:
+        os.replace(staging, cache_dir)
+    except OSError:
+        if not cache_dir.is_dir():
+            raise
+        # Another run published the same clone first: keep theirs.
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _drop_stored_credentials(cache_dir: Path, url: str) -> None:
-    """Take a token out of a cached clone's ``.git/config`` before the clone is reused.
+    """Make sure a cached clone holds no credentials before it is reused.
 
-    A clone made by an earlier version, or by a run that was killed while it
-    transferred, can carry ``https://x-access-token:<token>@host/...`` as ``origin``.
-    Put the plain URL back; if that fails, delete the clone so it is fetched again.
-    Credentials that the source's own ``url`` carries are the contract author's
-    choice and are left alone.
+    A clone made by an earlier version, or by a run killed mid-transfer, can carry
+    ``https://x-access-token:<token>@host/...`` as ``origin``. A clone that finished is
+    kept, with the plain URL put back. One that did not (it has no commit), or that still
+    holds credentials afterwards, is deleted so it is fetched again. Credentials that the
+    source's own ``url`` carries are the contract author's choice and are left alone.
     """
-    origin = _origin_url(cache_dir)
-    if origin == url or not _has_credentials(origin):
+    tainted = _stored_credentials(cache_dir, url)
+    if not tainted:
         return
-    try:
-        _scrub_origin(cache_dir, origin, url)
-    except ResolutionError:
-        if cache_dir.exists():  # it could not even be deleted: do not reuse it
-            raise
+    if GitResolver._git_ok(["-C", str(cache_dir), "rev-parse", "--verify", "-q", "HEAD"]):
+        try:
+            _scrub_origin(cache_dir, tainted[0], url)
+        except ResolutionError:
+            pass  # the clone was deleted, or is checked again below
+        if not _stored_credentials(cache_dir, url):
+            return
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    if cache_dir.exists():
+        raise ResolutionError(f"cached clone {cache_dir} holds credentials and cannot be removed")
 
 
 def _scrub_origin(cache_dir: Path, tainted_url: str, url: str) -> None:
@@ -371,31 +427,23 @@ def _scrub_origin(cache_dir: Path, tainted_url: str, url: str) -> None:
         raise
 
 
-_ORIGIN_SECTION = re.compile(r'\[\s*remote\s+"origin"\s*\]|\[\s*remote\.origin\s*\]', re.IGNORECASE)
-_URL_LINE = re.compile(r"url\s*=\s*(.*)", re.IGNORECASE)
+_CONFIG_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"']+", re.IGNORECASE)
 _USERINFO = re.compile(r"([a-z][a-z0-9+.-]*)://([^/?#@]*)@", re.IGNORECASE)
 
 
-def _origin_url(cache_dir: Path) -> str:
-    """The ``remote.origin.url`` in a cached clone's git config ("" when there is none).
+def _stored_credentials(cache_dir: Path, url: str) -> List[str]:
+    """The URLs in a cached clone's git config that carry credentials *url* does not.
 
-    The file is read directly, so a cache that is reused without ever running git
-    still works without the ``git`` binary.
+    The config is scanned as text for anything shaped like a URL, whatever section or
+    spelling holds it (``origin``, a second ``url`` line, a ``pushurl``, a comment on the
+    header line), so a form that git does not write itself cannot hide a token. It is read
+    as a plain file, so a cache hit still works without the ``git`` binary.
     """
     try:
         text = (cache_dir / ".git" / "config").read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return ""
-    in_origin = False
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("["):
-            in_origin = bool(_ORIGIN_SECTION.fullmatch(line))
-        elif in_origin:
-            match = _URL_LINE.fullmatch(line)
-            if match:
-                return match.group(1).strip().strip('"')
-    return ""
+        return []
+    return [u for u in _CONFIG_URL.findall(text) if u != url and _has_credentials(u)]
 
 
 def _has_credentials(url: str) -> bool:

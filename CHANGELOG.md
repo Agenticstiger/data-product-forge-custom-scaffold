@@ -68,25 +68,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transfers anything, so a run killed mid-transfer left the token on disk. A branch or
   tag that needs the token is now fetched the way a commit pin always was (`git init`,
   `git fetch --depth 1 -- <url> <ref>`, `git checkout FETCH_HEAD`): no remote is
-  recorded, and git strips the credentials from `FETCH_HEAD`. A cached clone that still
-  carries credentials, made by an earlier version, is cleaned before it is reused: its
-  `origin` is reset to the source's plain `url`, or the clone is deleted and fetched
-  again. A source without a token is still cloned.
-- **A failed or interrupted fetch no longer leaves a directory for the next run to
-  reuse.** A commit pin that failed after `git init` left an empty repository in the
-  cache, and every later run failed with "missing fluid-scaffold.yaml" until it was
-  deleted by hand. The directory is now removed on any failure, `KeyboardInterrupt`
-  included. A process that is killed outright cannot clean up; deleting the directory
-  or setting `FLUID_CUSTOM_SCAFFOLD_NOCACHE=1` recovers.
+  recorded, and git strips the credentials from `FETCH_HEAD`. The ref is looked up as
+  `git clone --branch` looks it up, a branch first and then a tag, so the commit does not
+  depend on whether a token was used. A source without a token is still cloned. A cached
+  clone that still carries credentials, made by an earlier version, is cleaned before it
+  is reused: a finished clone gets its plain `url` back as `origin`, and one that did not
+  finish, or that still holds credentials afterwards, is deleted and fetched again.
+- **A failed, interrupted or killed fetch no longer leaves a directory for the next run to
+  reuse.** A clone is built in a `.partial-*` directory beside its final place and
+  renamed into it when it is whole. Before, a commit pin that failed after `git init`, or
+  any run killed mid-transfer, left an empty or partial repository in the cache, and every
+  later run failed with "missing fluid-scaffold.yaml" until it was deleted by hand. A
+  refresh (`FLUID_CUSTOM_SCAFFOLD_NOCACHE=1`) now keeps the old clone until the new one is
+  ready, and a missing token is reported before anything is deleted. A killed run leaves
+  only its `.partial-*` directory, which holds no token and can be deleted. A `ref` made of
+  dots (`.` or `..`) can no longer name the url's cache directory or its parent.
 - **git and ssh never wait for an answer.** git runs with `GIT_TERMINAL_PROMPT=0` unless
   the caller sets it, and an ssh URL runs with `GIT_SSH_COMMAND=ssh -o BatchMode=yes`,
   so a library call in a non-interactive job cannot hang on a credential prompt, a key
   passphrase or an unknown host key. An unknown host key, or a passphrase-protected key
   that is not in `ssh-agent`, is now an error that says how to fix it instead of a
-  prompt. The ssh default is left out when the caller has chosen an ssh command —
-  `GIT_SSH_COMMAND` or `GIT_SSH` in the environment, or `core.sshCommand` in git
-  config — because git gives `GIT_SSH_COMMAND` priority over the other two. To be
-  prompted again, set `GIT_SSH_COMMAND=ssh`.
+  prompt. The ssh default is left out whenever the caller could be choosing the ssh
+  command: `GIT_SSH_COMMAND` or `GIT_SSH` in the environment, a `core.sshCommand` in git
+  config, or any `include` / `includeIf` there (an include can set `core.sshCommand` for
+  one host or one directory, and only git can say whether it applies). git gives
+  `GIT_SSH_COMMAND` priority over the other two, so a default set blindly would switch
+  off a deploy key configured through either. To be prompted again, set
+  `GIT_SSH_COMMAND=ssh`.
 
 ## [0.4.1] — 2026-06-27
 

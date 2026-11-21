@@ -11,15 +11,21 @@ These tests run real git against stand-in ``ssh`` programs that log how they wer
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
+import subprocess
 from pathlib import Path
 from typing import Dict, List
 
 import pytest
 
 from data_product_forge_custom_scaffold.resolvers.base import ResolutionError
-from data_product_forge_custom_scaffold.resolvers.git import GitResolver, _git_env
+from data_product_forge_custom_scaffold.resolvers.git import (
+    GitResolver,
+    _batch_mode_blocked,
+    _git_env,
+)
 
 pytestmark = [
     pytest.mark.skipif(shutil.which("git") is None, reason="git binary not on PATH"),
@@ -33,6 +39,18 @@ SSH_URLS = [
 ]
 HTTPS_URL = "https://example.invalid/org/repo"
 BATCH_MODE = "ssh -o BatchMode=yes"
+
+
+def _git_version() -> tuple:
+    out = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout
+    found = re.search(r"(\d+)\.(\d+)", out)
+    return (int(found.group(1)), int(found.group(2))) if found else (0, 0)
+
+
+needs_has_config = pytest.mark.skipif(
+    shutil.which("git") is None or _git_version() < (2, 36),
+    reason="includeIf hasconfig: needs git 2.36",
+)
 
 
 @pytest.fixture
@@ -127,3 +145,85 @@ def test_no_hint_when_the_caller_chose_the_ssh_command(world, monkeypatch) -> No
 
     assert "Host key verification failed." in error
     assert "BatchMode" not in error
+
+
+def _clone(url: str, dest: Path) -> None:
+    """The command the resolver runs for a plain branch or tag: `git clone`, outside any repo."""
+    with pytest.raises(ResolutionError):
+        GitResolver._git(
+            ["clone", "--depth", "1", url, str(dest)], clone_url=url, url=url, what="clone"
+        )
+
+
+@pytest.mark.parametrize(
+    "directive",
+    ["[include]\n\tpath = {extra}\n", '[includeIf "gitdir:/somewhere/"]\n\tpath = {extra}\n'],
+    ids=["include", "includeIf"],
+)
+def test_an_include_in_git_config_means_the_default_is_not_guessed(
+    world, tmp_path: Path, directive: str
+) -> None:
+    # An include can set core.sshCommand for one host or one directory, and only git can say
+    # whether it applies. Guessing wrong would switch off the caller's own key.
+    extra = tmp_path / "extra.cfg"
+    extra.write_text("[user]\n\tname = someone\n")
+    world["config"].write_text(directive.format(extra=extra))
+
+    assert "GIT_SSH_COMMAND" not in _git_env(SSH_URLS[0])
+
+
+@needs_has_config
+def test_a_command_set_for_one_host_through_an_include_is_what_a_clone_uses(
+    world, tmp_path: Path
+) -> None:
+    url = SSH_URLS[0]
+    for_this_host = tmp_path / "host.cfg"
+    for_this_host.write_text(f"[core]\n\tsshCommand = {world['mine']}\n")
+    world["config"].write_text(
+        '[includeIf "hasconfig:remote.*.url:ssh://git@example.invalid/**"]\n'
+        f"\tpath = {for_this_host}\n"
+    )
+
+    _clone(url, tmp_path / "dest")
+
+    calls = _calls(world)
+    assert calls and all(call.startswith("mine ") for call in calls)
+    assert not any("BatchMode" in call for call in calls)
+
+
+def test_the_current_directorys_own_config_does_not_decide(
+    world, tmp_path: Path, monkeypatch
+) -> None:
+    # `git clone` never reads the config of the repository it is run from, so a
+    # core.sshCommand there must not switch the default off.
+    repo = tmp_path / "elsewhere"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "core.sshCommand", str(world["mine"])], check=True
+    )
+    monkeypatch.chdir(repo)
+
+    _clone(SSH_URLS[0], tmp_path / "dest")
+
+    calls = _calls(world)
+    assert len(calls) == 1 and calls[0].startswith("ssh -o BatchMode=yes ")
+
+
+@pytest.mark.parametrize(
+    ("text", "caused_by_batch_mode"),
+    [
+        ("Host key verification failed.", True),
+        ("git@example.invalid: Permission denied (publickey).", True),
+        ("fatal: could not create work tree dir 'x': Permission denied", False),
+        ("fatal: repository not found", False),
+    ],
+)
+def test_only_what_batch_mode_causes_gets_the_hint(text: str, caused_by_batch_mode: bool) -> None:
+    assert _batch_mode_blocked(text, {"GIT_SSH_COMMAND": BATCH_MODE}) is caused_by_batch_mode
+
+
+def test_no_hint_when_the_caller_set_the_same_command_themselves(monkeypatch) -> None:
+    monkeypatch.setenv("GIT_SSH_COMMAND", BATCH_MODE)
+
+    assert not _batch_mode_blocked("Host key verification failed.", {"GIT_SSH_COMMAND": BATCH_MODE})

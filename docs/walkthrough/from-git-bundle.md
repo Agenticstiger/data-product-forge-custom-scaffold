@@ -102,8 +102,10 @@ that still holds a token is cleaned the next time it is used.
 An `ssh://` or `git@host:org/repo` URL runs ssh without prompts (`-o BatchMode=yes`), so a
 job cannot hang on a key passphrase or an unknown-host question: add the host to
 `known_hosts` and load the key into `ssh-agent` first. If you choose the ssh command
-yourself (`GIT_SSH_COMMAND`, `GIT_SSH`, or `core.sshCommand` in git config), the default is
-left out. To be prompted again, set `GIT_SSH_COMMAND=ssh`.
+yourself the default is left out: set `GIT_SSH_COMMAND` or `GIT_SSH`, or configure
+`core.sshCommand` (an `include` or `includeIf` in your git config also leaves it out, since
+an include can set `core.sshCommand` for one host or directory). To be prompted again, set
+`GIT_SSH_COMMAND=ssh`.
 
 ## Pin a specific version
 
