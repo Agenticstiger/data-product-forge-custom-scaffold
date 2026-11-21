@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from data_product_forge_custom_scaffold.confinement import confine
+from data_product_forge_custom_scaffold.confinement import confine, confine_actions
 from data_product_forge_custom_scaffold.errors import EngineError, UnsafePathError
 
 
@@ -90,3 +90,35 @@ def test_refusals_name_the_offending_path_and_are_engine_errors(root: Path) -> N
     assert isinstance(ei.value, EngineError)
     # The refusal does not drag the absolute location of the output directory in.
     assert str(root) not in str(ei.value)
+
+
+# ── confine_actions: the plan-level check the engine runs before apply ─────────
+
+
+def _write(path: object) -> dict:
+    return {"op": "write_file", "params": {"path": path}}
+
+
+def test_confine_actions_accepts_a_plan_that_stays_inside(root: Path) -> None:
+    confine_actions(root, [_write("a.txt"), _write("sub/b.txt"), _write("c/../d.txt")])
+
+
+def test_confine_actions_refuses_the_first_unsafe_path(root: Path) -> None:
+    with pytest.raises(UnsafePathError, match="'../evil.txt'"):
+        confine_actions(root, [_write("ok.txt"), _write("../evil.txt"), _write("/etc/passwd")])
+
+
+def test_confine_actions_leaves_non_files_and_unusable_paths_to_apply(root: Path) -> None:
+    # apply() reports these as skipped/failed actions; refusing them here would
+    # change what a run with a sloppy plugin does.
+    confine_actions(
+        root,
+        [
+            {"op": "noop", "params": {"path": "../x"}},
+            _write(""),
+            _write(None),
+            _write(7),
+            {"op": "write_file"},
+            {"op": "write_file", "params": None},
+        ],
+    )

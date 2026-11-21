@@ -16,6 +16,7 @@ check and the write.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Iterable, Mapping
 
 from .errors import UnsafePathError
 
@@ -47,3 +48,18 @@ def confine(out_root: Path, raw: object) -> str:
     if rel == Path("."):
         raise UnsafePathError(f"output path {raw!r} names the output directory itself")
     return rel.as_posix()
+
+
+def confine_actions(out_root: Path, actions: Iterable[Mapping[str, Any]]) -> None:
+    """Refuse a plan whose ``write_file`` paths would land outside *out_root*.
+
+    Runs for every bundle kind, between ``plan()`` and ``apply()``. A non-file op,
+    or an empty or non-string path, is left to ``apply()``, which reports it as a
+    skipped or failed action, exactly as it always has.
+    """
+    for action in actions:
+        if action.get("op") != "write_file":
+            continue
+        raw = (action.get("params") or {}).get("path")
+        if isinstance(raw, str) and raw:
+            confine(out_root, raw)
