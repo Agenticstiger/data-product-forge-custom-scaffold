@@ -80,6 +80,7 @@ def _backend_answer(
         input=request.rfile.read(length) if length else b"",
         env=env,
         capture_output=True,
+        timeout=60,
     ).stdout
     head, _, payload = out.partition(b"\r\n\r\n")
     status, headers = 200, []
@@ -94,6 +95,7 @@ def _backend_answer(
 
 class _Handler(BaseHTTPRequestHandler):
     server: GitServer  # type: ignore[assignment]
+    timeout = 60  # a client that goes silent ends its own handler, not the run
 
     def log_message(self, *args: object) -> None:  # keep the test output quiet
         pass
