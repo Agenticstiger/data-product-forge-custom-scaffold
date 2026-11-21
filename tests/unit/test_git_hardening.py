@@ -39,7 +39,7 @@ def test_git_subprocesses_never_prompt_by_default(monkeypatch) -> None:
     monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
     seen = _spy_run(monkeypatch)
 
-    GitResolver._git(["status"], clone_url=PLAIN_URL, url=PLAIN_URL, what="status")
+    GitResolver._git(["status"], url=PLAIN_URL, what="status")
     GitResolver._git_ok(["status"])
     GitResolver._head_sha(Path("."))
 
@@ -52,7 +52,7 @@ def test_an_explicit_prompt_setting_is_respected(monkeypatch) -> None:
     monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
     seen = _spy_run(monkeypatch)
 
-    GitResolver._git(["status"], clone_url=PLAIN_URL, url=PLAIN_URL, what="status")
+    GitResolver._git(["status"], url=PLAIN_URL, what="status")
 
     assert seen[0]["env"]["GIT_TERMINAL_PROMPT"] == "1"
 
@@ -60,7 +60,7 @@ def test_an_explicit_prompt_setting_is_respected(monkeypatch) -> None:
 def test_a_source_with_no_token_is_cloned_and_nothing_else(monkeypatch, tmp_path: Path) -> None:
     calls: List[List[str]] = []
 
-    def fake_git(args, *, clone_url, url, what):
+    def fake_git(args, *, url, what, credential=None):
         calls.append(list(args))
         Path(args[-1]).mkdir(parents=True)  # `git clone` creates the directory it clones into
 
@@ -75,7 +75,7 @@ def test_a_source_with_no_token_is_cloned_and_nothing_else(monkeypatch, tmp_path
 def _git_that_makes_its_directory_then(monkeypatch, failure: BaseException) -> None:
     """Stub GitResolver._git: create the directory git would create, then fail."""
 
-    def stops(args, *, clone_url, url, what):
+    def stops(args, *, url, what, credential=None):
         if args[0] in ("clone", "init"):
             Path(args[-1]).mkdir(parents=True, exist_ok=True)
         raise failure
@@ -134,10 +134,13 @@ def test_a_missing_token_is_reported_before_anything_is_deleted(
     cache = tmp_path / "cache" / "clone"
     cache.mkdir(parents=True)
     (cache / "keep").write_text("the old clone")
-    monkeypatch.delenv("DPF_NO_SUCH_TOKEN", raising=False)
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS", "example.com")
+    monkeypatch.delenv("FLUID_SCAFFOLD_NO_SUCH_TOKEN", raising=False)
 
     with pytest.raises(ResolutionError, match="unset"):
-        GitResolver()._clone_into_cache(PLAIN_URL, "v1", cache, {"secret_ref": "DPF_NO_SUCH_TOKEN"})
+        GitResolver()._clone_into_cache(
+            PLAIN_URL, "v1", cache, {"secret_ref": "FLUID_SCAFFOLD_NO_SUCH_TOKEN"}
+        )
 
     assert (cache / "keep").read_text() == "the old clone"
 
@@ -206,22 +209,25 @@ def test_a_publish_that_fails_for_another_reason_is_an_error(monkeypatch, tmp_pa
         git_resolver._publish(staging, cache, replace=False)
 
 
-def test_an_error_does_not_keep_the_failed_command_with_its_token(monkeypatch) -> None:
-    # The CalledProcessError's argument list holds the token URL. The new error is raised
-    # outside its handler, so it is not chained as __context__ for a reporter to find.
-    token_url = f"https://x-access-token:{TOKEN}@example.com/org/repo"
+def test_an_error_does_not_keep_the_failed_command_or_the_credential(monkeypatch) -> None:
+    # The error is raised outside its handler, so the CalledProcessError is not chained as
+    # __context__ for a reporter to find, and what git printed is redacted.
+    credential = git_resolver._Credential(url=PLAIN_URL, token=TOKEN)
+    basic = credential._basic
 
     def fail(args, **kwargs):
+        if args[1:3] == ["ls-remote", "--get-url"]:  # git is asked how it will use the url
+            return subprocess.CompletedProcess(args, 0, stdout=PLAIN_URL + "\n", stderr="")
         raise subprocess.CalledProcessError(
-            1, args, stderr=f"fatal: unable to access '{token_url}'"
+            1, args, stderr=f"fatal: bad header {basic} for {TOKEN} at '{PLAIN_URL}'"
         )
 
     monkeypatch.setattr(git_resolver.subprocess, "run", fail)
 
     with pytest.raises(ResolutionError) as raised:
-        GitResolver._git(["fetch", token_url], clone_url=token_url, url=PLAIN_URL, what="fetch")
+        GitResolver._git(["fetch", PLAIN_URL], url=PLAIN_URL, what="fetch", credential=credential)
 
-    assert TOKEN not in str(raised.value)
+    assert TOKEN not in str(raised.value) and basic not in str(raised.value)
     assert raised.value.__context__ is None and raised.value.__cause__ is None
 
 

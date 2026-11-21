@@ -87,7 +87,7 @@ def _must_not_run(*args: Any, **kwargs: Any) -> None:
 
 
 def _scrub_that_fails(monkeypatch) -> None:
-    def failing_git(args: List[str], *, clone_url: str, url: str, what: str) -> None:
+    def failing_git(args: List[str], *, url: str, what: str, credential: Any = None) -> None:
         raise ResolutionError("git reset the remote URL failed")
 
     monkeypatch.setattr(GitResolver, "_git", staticmethod(failing_git))
@@ -269,17 +269,6 @@ def test_a_clone_with_no_credential_is_reused_as_it_is(cache: Path, monkeypatch,
     GitResolver().resolve(_source())  # no git command of any kind, no fetch
 
 
-def test_credentials_the_source_url_itself_carries_are_left_alone(cache: Path, monkeypatch) -> None:
-    # They are the contract author's own choice, and rewriting them would re-fetch on every run.
-    cache_dir = _unfinished_clone(WITH_TOKEN, url=WITH_TOKEN)
-    (cache_dir / MANIFEST).write_text("apiVersion: forge.scaffold/v1\n")
-    _never_fetch(monkeypatch)
-    monkeypatch.setattr(GitResolver, "_git", staticmethod(_must_not_run))
-    monkeypatch.setattr(GitResolver, "_git_ok", staticmethod(_must_not_run))
-
-    GitResolver().resolve(_source(url=WITH_TOKEN))
-
-
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
@@ -329,31 +318,30 @@ def test_a_token_is_found_however_the_config_spells_it(tmp_path: Path, config: s
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "config").write_text(config)
 
-    assert "https://a:b@h/x" in _stored_credentials(tmp_path, PLAIN)
+    assert "https://a:b@h/x" in _stored_credentials(tmp_path)
 
 
 @pytest.mark.parametrize(
-    ("config", "url"),
+    "config",
     [
-        ('[remote "origin"]\n\turl = https://example.invalid/org/repo\n', PLAIN),
-        ('[remote "origin"]\n\turl = ssh://git@example.invalid/org/repo\n', PLAIN),
-        (f'[remote "origin"]\n\turl = {WITH_TOKEN}\n', WITH_TOKEN),  # the source's own url
-        ("[core]\n\tbare = false\n", PLAIN),
-        ("", PLAIN),
+        '[remote "origin"]\n\turl = https://example.invalid/org/repo\n',
+        '[remote "origin"]\n\turl = ssh://git@example.invalid/org/repo\n',
+        "[core]\n\tbare = false\n",
+        "",
     ],
-    ids=["plain", "ssh user name", "the source's own url", "no url at all", "empty"],
+    ids=["plain", "ssh user name", "no url at all", "empty"],
 )
 def test_nothing_is_reported_when_there_is_no_credential_to_remove(
-    tmp_path: Path, config: str, url: str
+    tmp_path: Path, config: str
 ) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "config").write_text(config)
 
-    assert _stored_credentials(tmp_path, url) == []
+    assert _stored_credentials(tmp_path) == []
 
 
 def test_a_directory_with_no_git_config_has_no_stored_credentials(tmp_path: Path) -> None:
-    assert _stored_credentials(tmp_path, PLAIN) == []
+    assert _stored_credentials(tmp_path) == []
 
 
 def test_a_token_that_cannot_be_deleted_is_an_error_even_after_the_rename(
@@ -408,7 +396,7 @@ def test_a_first_run_that_loses_the_race_keeps_the_clone_the_other_run_published
     # Another run publishes the same clone while this one is still fetching (both saw no cache).
     cache_dir = GitResolver._cache_dir_for(PLAIN, "v1")
 
-    def fetch_while_the_other_run_publishes(self, clone_url, ref, target, url):
+    def fetch_while_the_other_run_publishes(self, ref, target, url, credential):
         target.mkdir(parents=True)
         (target / MANIFEST).write_text("apiVersion: ours\n")
         cache_dir.mkdir(parents=True)  # the other run's clone appears first
@@ -429,7 +417,7 @@ def test_a_refresh_replaces_the_clone_another_run_published(cache: Path, monkeyp
     cache_dir.mkdir(parents=True)
     (cache_dir / MANIFEST).write_text("apiVersion: old\n")
 
-    def fetch(self, clone_url, ref, target, url):
+    def fetch(self, ref, target, url, credential):
         target.mkdir(parents=True)
         (target / MANIFEST).write_text("apiVersion: new\n")
 

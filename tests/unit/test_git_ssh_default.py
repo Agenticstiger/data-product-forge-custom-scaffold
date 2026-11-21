@@ -82,7 +82,7 @@ def world(tmp_path: Path, monkeypatch) -> Dict[str, Path]:
 def _ls_remote(url: str) -> str:
     """Run ``git ls-remote`` through the resolver; return the error it raises."""
     with pytest.raises(ResolutionError) as raised:
-        GitResolver._git(["ls-remote", url], clone_url=url, url=url, what="ls-remote")
+        GitResolver._git(["ls-remote", url], url=url, what="ls-remote")
     return str(raised.value)
 
 
@@ -150,9 +150,7 @@ def test_no_hint_when_the_caller_chose_the_ssh_command(world, monkeypatch) -> No
 def _clone(url: str, dest: Path) -> None:
     """The command the resolver runs for a plain branch or tag: `git clone`, outside any repo."""
     with pytest.raises(ResolutionError):
-        GitResolver._git(
-            ["clone", "--depth", "1", url, str(dest)], clone_url=url, url=url, what="clone"
-        )
+        GitResolver._git(["clone", "--depth", "1", url, str(dest)], url=url, what="clone")
 
 
 @pytest.mark.parametrize(
