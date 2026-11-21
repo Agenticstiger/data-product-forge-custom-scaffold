@@ -61,7 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lock YAML, which records contract variables verbatim. The lock path is now refused
   if it is a symlink (`UnsafePathError`, before any pattern is applied, on a dry run
   too), the write opens it without following links, and the same guard covers reading
-  the lock for `--pin` / `--update` and `generate()`'s read-back.
+  the lock for `--pin` / `--update` and `generate()`'s read-back. A new lock is created
+  owner-only (mode `0o600`); an existing lock keeps its mode when it is rewritten.
 - **A token used for a `git` branch or tag clone no longer stays in the cache.**
   `git clone` records the URL it was given, token included, as `origin` in
   `.git/config`; the remote is now reset to the credential-free URL straight after the

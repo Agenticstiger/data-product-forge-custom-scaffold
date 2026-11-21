@@ -141,10 +141,10 @@ def write_lock(output_root: Path, lock: Mapping[str, Any]) -> Path:
     path = lock_path(output_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-    # 0o644: owner-writable and world-readable, like any checked-in file. The umask can
-    # only narrow it; the mode must never be group- or world-writable.
+    # A new lock is created owner-only (0o600); an existing one keeps its mode, because
+    # O_TRUNC does not change it. The umask can only narrow the mode further.
     try:
-        fd = os.open(path, flags, 0o644)
+        fd = os.open(path, flags, 0o600)
     except OSError as e:
         if e.errno == errno.ELOOP:
             raise UnsafePathError(

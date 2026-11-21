@@ -176,13 +176,24 @@ def test_write_lock_pins_lf_newlines_on_every_platform(tmp_path: Path, monkeypat
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
-def test_write_lock_is_never_group_or_world_writable_even_with_a_permissive_umask(tmp_path: Path):
-    # The lock is a normal checked-in file: readable by all, writable by its owner. The
-    # open() mode must not widen that when the process umask is 0.
+def test_a_new_lock_is_owner_only_even_with_a_permissive_umask(tmp_path: Path):
     previous = os.umask(0)
     try:
         path = write_lock(tmp_path, {"lockfileVersion": 1})
     finally:
         os.umask(previous)
 
-    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_an_existing_lock_keeps_its_mode_when_it_is_rewritten(tmp_path: Path):
+    # The mode argument only applies when the file is created; O_TRUNC leaves it alone.
+    path = tmp_path / LOCKFILE_NAME
+    path.write_text("old\n")
+    path.chmod(0o640)
+
+    write_lock(tmp_path, {"lockfileVersion": 1})
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    assert "lockfileVersion" in path.read_text()

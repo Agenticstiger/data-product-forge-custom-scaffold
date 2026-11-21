@@ -151,7 +151,8 @@ pattern therefore leaves the earlier patterns' files in `out_dir` (as a failing
 `fluid-scaffold.lock` is the engine's own file and is held to a stricter rule: it is never
 written or read through a symlink. A symlink at that name — pointing anywhere, inside
 `out_dir` or out of it — raises `UnsafePathError` before any pattern is applied, on a dry
-run too, and the write itself refuses a link that appears in the meantime.
+run too, and the write itself refuses a link that appears in the meantime. A new lock is
+created owner-only (mode `0o600`); an existing lock keeps its mode when it is rewritten.
 
 A harmless `a/../b.txt` that stays inside is accepted and reported as `b.txt`. The
 check sees the tree as it is when `generate()` runs; it cannot stop another process
