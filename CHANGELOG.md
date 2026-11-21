@@ -63,14 +63,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too), the write opens it without following links, and the same guard covers reading
   the lock for `--pin` / `--update` and `generate()`'s read-back. A new lock is created
   owner-only (mode `0o600`); an existing lock keeps its mode when it is rewritten.
-- **A token used for a `git` branch or tag clone no longer stays in the cache.**
-  `git clone` records the URL it was given, token included, as `origin` in
-  `.git/config`; the remote is now reset to the credential-free URL straight after the
-  clone (and the clone deleted if that fails). Commit pins already passed the URL
-  inline.
-- **git never waits for a credential prompt.** Its subprocesses run with
-  `GIT_TERMINAL_PROMPT=0` unless the caller sets it, so a library call in a
-  non-interactive job cannot hang.
+- **A token used for a `git` source no longer reaches the cache.** `git clone <url>`
+  records the URL it was given, token included, as `origin` in `.git/config` before it
+  transfers anything, so a run killed mid-transfer left the token on disk. A branch or
+  tag that needs the token is now fetched the way a commit pin always was (`git init`,
+  `git fetch --depth 1 -- <url> <ref>`, `git checkout FETCH_HEAD`): no remote is
+  recorded, and git strips the credentials from `FETCH_HEAD`. A cached clone that still
+  carries credentials, made by an earlier version, is cleaned before it is reused: its
+  `origin` is reset to the source's plain `url`, or the clone is deleted and fetched
+  again. A source without a token is still cloned.
+- **A failed or interrupted fetch no longer leaves a directory for the next run to
+  reuse.** A commit pin that failed after `git init` left an empty repository in the
+  cache, and every later run failed with "missing fluid-scaffold.yaml" until it was
+  deleted by hand. The directory is now removed on any failure, `KeyboardInterrupt`
+  included. A process that is killed outright cannot clean up; deleting the directory
+  or setting `FLUID_CUSTOM_SCAFFOLD_NOCACHE=1` recovers.
+- **git and ssh never wait for an answer.** git runs with `GIT_TERMINAL_PROMPT=0` unless
+  the caller sets it, and an ssh URL runs with `GIT_SSH_COMMAND=ssh -o BatchMode=yes`,
+  so a library call in a non-interactive job cannot hang on a credential prompt, a key
+  passphrase or an unknown host key. An unknown host key, or a passphrase-protected key
+  that is not in `ssh-agent`, is now an error that says how to fix it instead of a
+  prompt. The ssh default is left out when the caller has chosen an ssh command —
+  `GIT_SSH_COMMAND` or `GIT_SSH` in the environment, or `core.sshCommand` in git
+  config — because git gives `GIT_SSH_COMMAND` priority over the other two. To be
+  prompted again, set `GIT_SSH_COMMAND=ssh`.
 
 ## [0.4.1] — 2026-06-27
 

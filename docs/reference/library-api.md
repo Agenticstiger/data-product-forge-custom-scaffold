@@ -121,8 +121,10 @@ newlines on every platform.
 
 `dry_run=True` resolves the libraries, plans every pattern and checks every path, but
 writes nothing into `out_dir` and does not create it. (Resolving a `git` library still
-clones it into the per-user cache; git is run with `GIT_TERMINAL_PROMPT=0` unless you set
-it, so a credential prompt cannot hang a non-interactive job.) `files` is what a real run would write,
+fetches it into the per-user cache. git runs with `GIT_TERMINAL_PROMPT=0` unless you set it,
+and an ssh URL with `ssh -o BatchMode=yes` unless you chose an ssh command (`GIT_SSH_COMMAND`,
+`GIT_SSH` or `core.sshCommand`), so neither a credential prompt nor an ssh passphrase or
+host-key question can hang a non-interactive job.) `files` is what a real run would write,
 including the lock, with digests of the planned bytes — so when the lock is written, a
 dry run and a real run of the same contract return equal `files`.
 

@@ -92,7 +92,18 @@ export GITHUB_TOKEN=ghp_xxx
 fluid custom-scaffold
 ```
 
-The token is injected into the clone URL at fetch time, never written to disk, never logged.
+The token goes into the URL of the `git fetch` that downloads the bundle
+(`https://x-access-token:<token>@host/...`). It is never written to the cache, because a
+fetch by URL records no remote, and it is never logged. A cache made by an earlier version
+that still holds a token is cleaned the next time it is used.
+
+### SSH sources
+
+An `ssh://` or `git@host:org/repo` URL runs ssh without prompts (`-o BatchMode=yes`), so a
+job cannot hang on a key passphrase or an unknown-host question: add the host to
+`known_hosts` and load the key into `ssh-agent` first. If you choose the ssh command
+yourself (`GIT_SSH_COMMAND`, `GIT_SSH`, or `core.sshCommand` in git config), the default is
+left out. To be prompted again, set `GIT_SSH_COMMAND=ssh`.
 
 ## Pin a specific version
 
