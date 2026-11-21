@@ -363,6 +363,8 @@ class GitResolver(Resolver):
             detail = (e.stderr or "").strip()
             if credential is not None:
                 detail = credential.redact(detail)
+                hint = credential.hint(detail)
+                detail += "\n" + hint if hint else ""
         if _batch_mode_blocked(detail, env):
             detail += "\n" + _BATCH_MODE_HINT
         raise ResolutionError(f"git {what} failed: {detail}")
@@ -445,6 +447,7 @@ class _Credential:
     """A token, bound to one url. It reaches git as environment config and nowhere else."""
 
     url: str
+    name: str  # the variable the token came from
     token: str = field(repr=False)
 
     @property
@@ -460,6 +463,22 @@ class _Credential:
 
     def redact(self, text: str) -> str:
         return text.replace(self.token, "[redacted]").replace(self._basic, "[redacted]")
+
+    def hint(self, detail: str) -> str:
+        """What to tell the operator when a fetch that carried this credential failed."""
+        if re.search(r"returned error: 30[1278]", detail):
+            return (
+                "The url redirects, and a credential is never sent to a redirect target: "
+                "use the repository's final url."
+            )
+        if re.search(
+            r"could not read Username|returned error: 40[13]|Authentication failed", detail
+        ):
+            return (
+                f"The server did not accept the credential from {self.name}: check that the "
+                f"token is valid for this host and can read the repository."
+            )
+        return ""
 
 
 def _csv(value: str) -> List[str]:
@@ -513,7 +532,7 @@ def _credential(url: str, auth: Mapping[str, Any]) -> Optional[_Credential]:
             f"git {_MIN_GIT[0]}.{_MIN_GIT[1]} or newer is needed to send a credential without "
             f"putting it on a command line (found {found[0]}.{found[1]})"
         )
-    return _Credential(url=url, token=token)
+    return _Credential(url=url, name=binding.name, token=token)
 
 
 def _git_version() -> Tuple[int, int]:

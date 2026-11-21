@@ -218,7 +218,7 @@ def test_a_publish_that_fails_for_another_reason_is_an_error(monkeypatch, tmp_pa
 def test_an_error_does_not_keep_the_failed_command_or_the_credential(monkeypatch) -> None:
     # The error is raised outside its handler, so the CalledProcessError is not chained as
     # __context__ for a reporter to find, and what git printed is redacted.
-    credential = git_resolver._Credential(url=PLAIN_URL, token=TOKEN)
+    credential = git_resolver._Credential(url=PLAIN_URL, name="FLUID_SCAFFOLD_T", token=TOKEN)
     basic = credential._basic
 
     def fail(args, **kwargs):

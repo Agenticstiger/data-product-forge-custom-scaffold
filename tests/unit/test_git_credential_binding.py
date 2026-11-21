@@ -8,6 +8,7 @@ settings (the process environment) do. These tests pin that, and the rules aroun
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from typing import Any, List
 
 import pytest
@@ -20,7 +21,7 @@ from data_product_forge_custom_scaffold.resolvers.git import (
     _bind_auth,
     _Credential,
 )
-from tests.helpers import git_source, patch_run
+from tests.helpers import completed, git_source, patch_run
 
 URL = "https://github.com/org/bundle"
 SECRET = "ghp_VERYSECRETVALUE"
@@ -269,7 +270,7 @@ def test_the_key_names_the_credential_and_never_its_value(operator) -> None:
 
 
 def test_a_credential_does_not_show_its_token_in_a_repr_or_in_text() -> None:
-    credential = _Credential(url=URL, token=SECRET)
+    credential = _Credential(url=URL, name="FLUID_SCAFFOLD_TOKEN", token=SECRET)
 
     assert SECRET not in repr(credential)
     redacted = credential.redact(f"bad: {SECRET} and {credential._basic}")
@@ -277,7 +278,7 @@ def test_a_credential_does_not_show_its_token_in_a_repr_or_in_text() -> None:
 
 
 def test_the_header_is_bound_to_the_url_and_redirects_are_refused() -> None:
-    credential = _Credential(url=URL, token=SECRET)
+    credential = _Credential(url=URL, name="FLUID_SCAFFOLD_TOKEN", token=SECRET)
 
     keys = dict(credential.config())
     assert keys[f"http.{URL}.extraHeader"].startswith("Authorization: Basic ")
@@ -300,3 +301,56 @@ def test_a_git_too_old_to_carry_the_credential_is_an_error(operator, monkeypatch
 
     with pytest.raises(ResolutionError, match=r"git 2\.31 or newer"):
         git_resolver._credential(URL, {"secret_ref": "FLUID_SCAFFOLD_TOKEN"})
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    [
+        (
+            "fatal: could not read Username for 'https://h': terminal prompts disabled",
+            "did not accept the credential from FLUID_SCAFFOLD_TOKEN",
+        ),
+        (
+            "fatal: unable to access 'https://h/': The requested URL returned error: 403",
+            "did not accept the credential",
+        ),
+        ("remote: Authentication failed", "did not accept the credential"),
+        (
+            "fatal: unable to access 'https://h/': The requested URL returned error: 301",
+            "never sent to a redirect target",
+        ),
+        (
+            "fatal: unable to access 'https://h/': The requested URL returned error: 307",
+            "never sent to a redirect target",
+        ),
+        ("fatal: repository 'https://h/x' not found", ""),
+        ("", ""),
+    ],
+)
+def test_a_failed_credentialed_fetch_says_what_to_check(detail: str, expected: str) -> None:
+    credential = _Credential(url=URL, name="FLUID_SCAFFOLD_TOKEN", token=SECRET)
+
+    hint = credential.hint(detail)
+
+    assert (expected in hint) if expected else hint == ""
+    assert SECRET not in hint  # it names the variable, never the value
+
+
+def test_the_hint_reaches_the_error_a_caller_sees(monkeypatch) -> None:
+    credential = _Credential(url=URL, name="FLUID_SCAFFOLD_TOKEN", token=SECRET)
+
+    def fail(args, kwargs):
+        if args[1:3] == ["ls-remote", "--get-url"]:
+            return completed(args, URL + "\n")
+        raise subprocess.CalledProcessError(
+            128,
+            args,
+            stderr=f"fatal: could not read Username for '{URL}': terminal prompts disabled",
+        )
+
+    patch_run(monkeypatch, git_resolver, fail)
+
+    with pytest.raises(
+        ResolutionError, match="did not accept the credential from FLUID_SCAFFOLD_TOKEN"
+    ):
+        GitResolver._git(["clone", URL, "/x"], url=URL, what="clone", credential=credential)

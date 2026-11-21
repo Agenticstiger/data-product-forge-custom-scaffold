@@ -53,7 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   url, with `http.followRedirects=false` so it cannot follow a redirect to another host.
   An environment is readable only by its owner and root. This needs git 2.31 or newer; an
   older git is an error. Because the url no longer carries it, a branch or tag is cloned
-  as before whether or not a token is used.
+  as before whether or not a token is used. A fetch that carried a credential and failed
+  now says what to check: that the server did not accept the token (naming the variable,
+  never the value), or that the url redirects and a credential is never sent to a redirect
+  target.
 - The cache key of a source with `auth` includes the host and the variable name (never the
   value), so a source without `auth` cannot reuse a private clone. Keys of sources without
   `auth` are unchanged; a source with `auth` is fetched once more under its new key.
