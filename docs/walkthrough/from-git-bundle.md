@@ -96,19 +96,22 @@ fluid custom-scaffold
 
 The rules, all enforced before git runs:
 
-- The host in `url` must be listed in `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS` (comma-separated, exact
-  host names). Unset, no token is sent anywhere.
+- The host in `url` must be listed in `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS` (comma-separated, exact:
+  `host`, or `host:port` for a port other than 443). Unset, a source with `auth` is refused and
+  no token is sent anywhere.
 - `secret_ref` must start with `FLUID_SCAFFOLD_`. To allow other names, list prefixes in
   `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated).
 - `auth` goes only with an `https://host[:port]/path` url (a plain ASCII host name; no user,
-  brackets, escapes, backslashes, query or fragment). A `url` that carries credentials is refused.
+  brackets, escapes, backslashes, query or fragment). A `url` that carries credentials, or any
+  user part (`https://alice@host/...`, not only `https://user:token@host/...`), is refused: a
+  user part can be the token, and the lock would record it. Drop the user from the url.
 
 The token is handed to git in the environment, as an `http.<url>.extraHeader` for that url
 only (git 2.31 or newer), and redirects are refused for the fetch. It is on no command line,
 so `ps` does not show it, and it is not written to the cache or the lock or logged. A cache
-made by an earlier version that still holds a token is cleaned the next time it is used.
-The cache entry is keyed by the host and the variable name, so a source without `auth` never
-reuses a private clone.
+made by an earlier version that still holds a token is deleted the next time any source is
+resolved. The cache entry is keyed by the host, the port and the variable name, so a source
+without `auth` never reuses a private clone.
 
 ### SSH sources
 

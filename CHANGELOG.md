@@ -33,9 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while `url` named any host, so a contract could make the engine send any secret of the
   process to a host of its choice. Now the contract only asks, and the operator decides,
   in the process environment:
-  - `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS`: the host names (comma-separated, exact,
-    case-insensitive) a credential may be sent to. Unset or empty, none: a source with
-    `auth` is refused.
+  - `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS`: the hosts a credential may be sent to,
+    comma-separated, each `host` or `host:port` (exact, case-insensitive). A `host` entry
+    means the https default port, 443; a server on another port needs its own
+    `host:port` entry. Unset or empty, none: a source with `auth` is refused.
   - `secret_ref` must name a variable that starts with `FLUID_SCAFFOLD_`, or with a prefix
     listed in `FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES` (comma-separated). It is checked
     before the environment is read.
@@ -43,11 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (an ASCII host name; no user, brackets, escapes, backslashes, query or fragment, which
     a url parser could read two ways). With `git+https://` (which used to go without the
     token and without a word) or `ssh://` it is an error.
-  - A `url` that carries credentials (`https://user:token@host/...`) is refused: it would
-    have been written into the lock as `mirror_url`.
+  - A `url` that carries credentials, or any user part, on an `https://` url
+    (`https://user:token@host/...`, `https://token@host/...`, `https://alice@host/...`) is
+    refused: a user part can be the token, and it would have been written into the lock as
+    `mirror_url`. Drop the user from the url, and use `auth` for a private repository. An
+    `ssh://git@host/...` or `git@host:org/repo` url keeps its account name.
+  - `auth` that is not a mapping (`auth: FLUID_SCAFFOLD_TOKEN`) is an error; before, the
+    source went on without a credential and nothing said so.
+  - A `url` with a control character in it (a NUL, a newline) is refused.
 
   To migrate, rename the variable (`GITHUB_TOKEN` to `FLUID_SCAFFOLD_GITHUB_TOKEN`, in the
-  contract and in the environment) and set `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS=github.com`.
+  contract and in the environment), set `FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS=github.com`
+  (`host:port` for a port other than 443), and remove any `user@` from the url.
 - **The token is on no command line.** It used to be part of the url given to `git`, so
   `ps` showed it, for `git` and for the `git-remote-https` it starts, to every user of the
   machine. It now reaches git as `http.<url>.extraHeader` in `GIT_CONFIG_COUNT` /
@@ -59,9 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now says what to check: that the server did not accept the token (naming the variable,
   never the value), or that the url redirects and a credential is never sent to a redirect
   target.
-- The cache key of a source with `auth` includes the host and the variable name (never the
-  value), so a source without `auth` cannot reuse a private clone. Keys of sources without
-  `auth` are unchanged; a source with `auth` is fetched once more under its new key.
+- The cache key of a source with `auth` includes the host, the port and the variable name
+  (never the value), so a source without `auth` cannot reuse a private clone. Keys of
+  sources without `auth` are unchanged; a source with `auth` is fetched once more under its
+  new key.
 - **Planned output paths are confined before `apply()`**, for every bundle kind and
   on a dry run too: the destination is resolved (following existing symlinks) and
   must sit inside the output directory, else `UnsafePathError`. A Python plugin's
@@ -105,8 +114,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A cached clone that still carries credentials, made by an earlier version, is cleaned
   before it is reused, and before a refresh too: a finished clone gets its plain `url`
   back as `origin`, and one that did not finish, or that still holds credentials
-  afterwards, is deleted and fetched again. A cache entry that is a symbolic link, or
-  whose `.git` or `.git/config` is one, is refused instead of reused or written through.
+  afterwards, is deleted and fetched again. Every other clone in the cache that holds
+  credentials (an earlier version made them for sources with `auth`, under a key that is
+  no longer used, so nothing would ever have cleaned them) is deleted at the start of every
+  run. A cache entry that is a symbolic link, or whose `.git` or `.git/config` is one, is
+  refused instead of reused or written through.
 - **A failed, interrupted or killed fetch no longer leaves a directory for the next run to
   reuse.** A clone is built in a `.partial-*` directory beside its final place and
   renamed into it when it is whole. Before, a commit pin that failed after `git init`, or
@@ -119,9 +131,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which was asked for, does replace one). A clone that cannot be renamed aside is left
   whole and the run fails, rather than deleting it in place. A killed run
   leaves only a `.partial-*` or `.old-*` directory, and the next run of any source sweeps
-  those: at once if one holds a token (a clone from an earlier version), else when it is
-  older than an hour. A `ref` made of dots (`.` or `..`) can no longer name the url's
-  cache directory or its parent.
+  those: at once if one holds a token (a clone from an earlier version), else when it has
+  not changed for a day. A `ref` made of dots (`.` or `..`) can no longer name the url's
+  cache directory or its parent, and one that starts `.partial-` or `.old-` can no longer
+  name a directory the sweep would delete.
 - **git and ssh never wait for an answer.** git runs with `GIT_TERMINAL_PROMPT=0` unless
   the caller sets it, and an ssh URL runs with `GIT_SSH_COMMAND=ssh -o BatchMode=yes`,
   so a library call in a non-interactive job cannot hang on a credential prompt, a key
