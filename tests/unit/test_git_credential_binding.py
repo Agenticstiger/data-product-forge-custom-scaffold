@@ -20,6 +20,7 @@ from data_product_forge_custom_scaffold.resolvers.git import (
     _bind_auth,
     _Credential,
 )
+from tests.helpers import git_source, patch_run
 
 URL = "https://github.com/org/bundle"
 SECRET = "ghp_VERYSECRETVALUE"
@@ -38,19 +39,15 @@ def operator(monkeypatch):
 
 def _no_git(monkeypatch) -> List[Any]:
     """Fail the test if anything starts a process: a refused source must not reach git."""
-    started: List[Any] = []
 
-    def run(args, **kwargs):
-        started.append(args)
+    def refuse(args: Any, kwargs: Any) -> Any:
         raise AssertionError(f"a process was started: {args}")
 
-    monkeypatch.setattr(git_resolver.subprocess, "run", run)
-    return started
+    return patch_run(monkeypatch, git_resolver, refuse)
 
 
 def _source(url: str = URL, auth: Any = None, ref: str = "v1") -> dict:
-    source = {"kind": "git", "url": url, "ref": ref}
-    return {**source, "auth": auth} if auth is not None else source
+    return git_source(url, ref, auth)
 
 
 # ── hosts ────────────────────────────────────────────────────────────────────

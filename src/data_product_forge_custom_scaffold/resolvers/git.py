@@ -236,37 +236,17 @@ class GitResolver(Resolver):
         # cache locations are user-scoped. Accepted for signature parity
         # with other resolvers.
         del contract_dir
-        url = source.get("url")
-        ref = source.get("ref")
-        subdir = source.get("subdir") or ""
-
-        if not url:
-            raise ResolutionError("git source missing required 'url'")
-        if not ref:
-            raise ResolutionError("git source missing required 'ref'")
-        if ":" in str(ref):
-            raise ResolutionError(f"git source ref {str(ref)!r} is not a valid git ref name")
-        if not isinstance(url, str) or not any(url.startswith(s) for s in _ALLOWED_SCHEMES):
-            raise ResolutionError(
-                f"git source url has disallowed scheme: {url!r} "
-                f"(allowed: https/ssh/git+https/git+ssh)"
-            )
-        if _has_credentials(url):
-            raise ResolutionError(
-                "git source url must not carry credentials (they would reach the lock); "
-                "name an environment variable in auth.secret_ref instead"
-            )
-        binding = _bind_auth(url, source.get("auth") or {})  # refuses before anything is cached
+        url, ref, subdir, binding = _validated(source)
 
         _sweep_leftovers()
-        cache_dir = self._cache_dir_for(url, str(ref), binding)
+        cache_dir = self._cache_dir_for(url, ref, binding)
         refetch = bool(os.environ.get(_NOCACHE))
         if os.path.lexists(cache_dir):
             _refuse_symlinks(cache_dir)
             if cache_dir.is_dir():  # also on a refresh: if the fetch fails the old clone stays
                 _drop_stored_credentials(cache_dir, url)
         if not cache_dir.is_dir() or refetch:
-            self._clone_into_cache(url, str(ref), cache_dir, source.get("auth") or {})
+            self._clone_into_cache(url, ref, cache_dir, source.get("auth") or {})
 
         bundle_root = (cache_dir / subdir).resolve() if subdir else cache_dir
         # Confine: subdir must stay under cache_dir.
@@ -286,9 +266,9 @@ class GitResolver(Resolver):
         return ResolvedBundle(
             kind=self.kind,
             bundle_root=bundle_root,
-            resolved_version=sha or str(ref),
+            resolved_version=sha or ref,
             mirror_url=url,
-            extra={"ref": str(ref), "subdir": subdir},
+            extra={"ref": ref, "subdir": subdir},
         )
 
     # ── private helpers ─────────────────────────────────────────────
@@ -422,6 +402,31 @@ class GitResolver(Resolver):
             return result.stdout.strip()
         except Exception:
             return ""
+
+
+def _validated(source: Mapping[str, Any]) -> Tuple[str, str, str, Optional["_AuthBinding"]]:
+    """The url, ref and subdir of a git source, and the credential it asks for, once everything
+    the engine refuses has been refused (before anything is cached or fetched)."""
+    url = source.get("url")
+    ref = source.get("ref")
+    if not url:
+        raise ResolutionError("git source missing required 'url'")
+    if not ref:
+        raise ResolutionError("git source missing required 'ref'")
+    if ":" in str(ref):
+        raise ResolutionError(f"git source ref {str(ref)!r} is not a valid git ref name")
+    if not isinstance(url, str) or not any(url.startswith(s) for s in _ALLOWED_SCHEMES):
+        raise ResolutionError(
+            f"git source url has disallowed scheme: {url!r} "
+            f"(allowed: https/ssh/git+https/git+ssh)"
+        )
+    if _has_credentials(url):
+        raise ResolutionError(
+            "git source url must not carry credentials (they would reach the lock); "
+            "name an environment variable in auth.secret_ref instead"
+        )
+    binding = _bind_auth(url, source.get("auth") or {})
+    return url, str(ref), source.get("subdir") or "", binding
 
 
 @dataclass(frozen=True)

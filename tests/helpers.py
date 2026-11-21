@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -163,3 +164,32 @@ def parse_cli(*argv: str) -> argparse.Namespace:
     sub = parser.add_subparsers(dest="cmd")
     cli.make_register()(sub)
     return parser.parse_args(list(argv))
+
+
+def git_source(
+    url: str, ref: str = "v1", auth: Optional[Mapping[str, Any]] = None
+) -> Dict[str, Any]:
+    """A ``git`` library source, as a contract writes it."""
+    source: Dict[str, Any] = {"kind": "git", "url": url, "ref": ref}
+    if auth is not None:
+        source["auth"] = dict(auth)
+    return source
+
+
+def patch_run(monkeypatch: Any, module: Any, respond: Callable[[Any, Dict[str, Any]], Any]):
+    """Replace ``subprocess.run`` as *module* sees it. *respond(args, kwargs)* answers a call.
+
+    Returns the list of ``(args, kwargs)`` every call was given, filled in as they happen.
+    """
+    calls: List[Tuple[Any, Dict[str, Any]]] = []
+
+    def fake(args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        return respond(args, kwargs)
+
+    monkeypatch.setattr(module.subprocess, "run", fake)
+    return calls
+
+
+def completed(args: Any, stdout: str = "") -> "subprocess.CompletedProcess[str]":
+    return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")

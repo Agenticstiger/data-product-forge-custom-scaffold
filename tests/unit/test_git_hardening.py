@@ -18,21 +18,27 @@ import pytest
 from data_product_forge_custom_scaffold.resolvers import git as git_resolver
 from data_product_forge_custom_scaffold.resolvers.base import ResolutionError
 from data_product_forge_custom_scaffold.resolvers.git import GitResolver, _scrub_origin
+from tests.helpers import completed, patch_run
 
 TOKEN = "s3cret-token-value"
 PLAIN_URL = "https://example.com/org/repo"
 
 
 def _spy_run(monkeypatch) -> List[Dict[str, Any]]:
-    """Replace subprocess.run in the resolver; return the list of keyword args it saw."""
-    seen: List[Dict[str, Any]] = []
+    """Replace subprocess.run in the resolver; return the keyword args each call was given."""
+    calls = patch_run(monkeypatch, git_resolver, lambda args, kwargs: completed(args, "abc123\n"))
 
-    def fake_run(args, **kwargs):
-        seen.append(kwargs)
-        return subprocess.CompletedProcess(args, 0, stdout="abc123\n", stderr="")
+    class Seen(list):
+        def __len__(self) -> int:
+            return len(calls)
 
-    monkeypatch.setattr(git_resolver.subprocess, "run", fake_run)
-    return seen
+        def __getitem__(self, index):  # type: ignore[override]
+            return calls[index][1]
+
+        def __iter__(self):
+            return (kwargs for _, kwargs in calls)
+
+    return Seen()
 
 
 def test_git_subprocesses_never_prompt_by_default(monkeypatch) -> None:

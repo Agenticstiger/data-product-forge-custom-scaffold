@@ -24,15 +24,9 @@ HOUR = 3600
 
 
 @pytest.fixture
-def git_cache(tmp_path: Path, monkeypatch) -> Path:
-    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_CACHE", str(tmp_path / "cache"))
-    monkeypatch.delenv("FLUID_CUSTOM_SCAFFOLD_NOCACHE", raising=False)
-    config = tmp_path / "gitconfig"
-    config.write_text("")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    (tmp_path / "cache" / "git" / "0123456789abcdef").mkdir(parents=True)
-    return tmp_path / "cache" / "git"
+def git_cache(isolated_git_cache: Path) -> Path:
+    (isolated_git_cache / "cache" / "git" / "0123456789abcdef").mkdir(parents=True)
+    return isolated_git_cache / "cache" / "git"
 
 
 def _leftover(url_dir: Path, name: str, *, config: str = "", age: float = 0.0) -> Path:

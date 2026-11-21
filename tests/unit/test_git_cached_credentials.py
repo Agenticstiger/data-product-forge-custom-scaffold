@@ -22,6 +22,7 @@ from data_product_forge_custom_scaffold.resolvers.git import (
     _has_credentials,
     _stored_credentials,
 )
+from tests.helpers import git_source
 
 TOKEN = "s3cret-token-value"
 PLAIN = "https://example.invalid/org/repo"
@@ -32,14 +33,8 @@ needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git binary n
 
 
 @pytest.fixture
-def cache(tmp_path: Path, monkeypatch) -> Path:
-    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_CACHE", str(tmp_path / "cache"))
-    monkeypatch.delenv("FLUID_CUSTOM_SCAFFOLD_NOCACHE", raising=False)
-    config = tmp_path / "gitconfig"  # the developer's own git config must not matter
-    config.write_text("")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    return tmp_path
+def cache(isolated_git_cache: Path) -> Path:
+    return isolated_git_cache
 
 
 def _git(*args: str) -> str:
@@ -72,7 +67,7 @@ def _unfinished_clone(origin: str, url: str = PLAIN, ref: str = "v1") -> Path:
 
 
 def _source(url: str = PLAIN, ref: str = "v1") -> dict:
-    return {"kind": "git", "url": url, "ref": ref}
+    return git_source(url, ref)
 
 
 def _never_fetch(monkeypatch) -> None:

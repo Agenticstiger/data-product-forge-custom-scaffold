@@ -11,7 +11,6 @@ These tests run real git against stand-in ``ssh`` programs that log how they wer
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -25,6 +24,7 @@ from data_product_forge_custom_scaffold.resolvers.git import (
     GitResolver,
     _batch_mode_blocked,
     _git_env,
+    _git_version,
 )
 
 pytestmark = [
@@ -39,12 +39,6 @@ SSH_URLS = [
 ]
 HTTPS_URL = "https://example.invalid/org/repo"
 BATCH_MODE = "ssh -o BatchMode=yes"
-
-
-def _git_version() -> tuple:
-    out = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout
-    found = re.search(r"(\d+)\.(\d+)", out)
-    return (int(found.group(1)), int(found.group(2))) if found else (0, 0)
 
 
 needs_has_config = pytest.mark.skipif(
