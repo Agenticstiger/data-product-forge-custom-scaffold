@@ -7,27 +7,28 @@ Source shape::
       "url": "https://github.com/example/my-bundle",
       "ref": "v1.2.0",                          # tag, branch, or sha
       "subdir": "bundles/my-scaffold",          # optional; default: repo root
-      "auth": { "secret_ref": "GITHUB_TOKEN" }  # optional
+      "auth": { "secret_ref": "FLUID_SCAFFOLD_GITHUB_TOKEN" }  # optional
     }
 
 Auth: ``secret_ref`` names an environment variable holding a token. The contract only asks
 for a credential; where it may go is decided by the operator, outside the contract:
 
-* ``FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS`` lists the hosts (comma-separated, exact) a credential
-  may be sent to. Unset or empty, no credential goes anywhere and a source with ``auth`` is
-  refused.
+* ``FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS`` lists the hosts (comma-separated, ``host`` or
+  ``host:port``, exact) a credential may be sent to. A ``host`` entry means the https
+  default port, 443. Unset or empty, no credential goes anywhere and a source with ``auth``
+  is refused.
 * ``secret_ref`` must start with ``FLUID_SCAFFOLD_`` or with a prefix in
   ``FLUID_CUSTOM_SCAFFOLD_SECRET_PREFIXES`` (comma-separated), so a contract cannot name any
   other variable.
-* ``auth`` goes only with an ``https://`` url, and a url that carries credentials
-  (``https://user:token@host/...``) is refused: it would end up in the lock.
+* ``auth`` goes only with an ``https://`` url, and a url that carries credentials, or any
+  user part (``https://user:token@host/...``), is refused: it would end up in the lock.
 
 The token never appears on a command line. It is handed to git in the environment as an
 ``http.<url>.extraHeader`` (``GIT_CONFIG_COUNT``, git 2.31 or newer) scoped to the source's
 url, with ``http.followRedirects=false`` so it cannot follow a redirect to another host. git
-records it nowhere in the clone, and it is never logged. The cache key includes the host and
-the variable name (never the value), so an unauthenticated source cannot reuse a private
-clone. A cached clone that carries credentials, made by an earlier version, is cleaned before
+records it nowhere in the clone, and it is never logged. The cache key includes the host
+(and port) and the variable name (never the value), so an unauthenticated source cannot
+reuse a private clone. A cached clone that carries credentials, made by an earlier version, is cleaned before
 it is reused.
 
 git never prompts on the terminal for a credential (``GIT_TERMINAL_PROMPT=0``
@@ -76,8 +77,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
-from urllib.parse import urlsplit
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ..manifest import MANIFEST_FILENAME
 from .base import ResolutionError, ResolvedBundle, Resolver, cache_root
@@ -96,6 +96,10 @@ _LEFTOVER_AGE = 3600.0
 
 # Allowed URL schemes — any other scheme is rejected outright.
 _ALLOWED_SCHEMES = ("https://", "ssh://", "git@", "git+https://", "git+ssh://")
+
+# A control character in a url (NUL, a newline, ...) is never part of one: git would not take
+# it as an argument, and the cache key joins its parts with NUL.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 # A full-length commit object name: 40 hex (SHA-1) or 64 hex (SHA-256). ``git
 # clone --branch`` rejects raw commit ids ("Remote branch <sha> not found"), so
@@ -165,7 +169,7 @@ def _effective_url(url: str, env: Mapping[str, str]) -> str:
 def _add_git_config(env: Dict[str, str], pairs: Sequence[Tuple[str, str]]) -> None:
     """Add config pairs to *env* after any ``GIT_CONFIG_COUNT`` pairs the caller already set."""
     try:
-        count = int(env.get("GIT_CONFIG_COUNT") or 0)
+        count = max(int(env.get("GIT_CONFIG_COUNT") or 0), 0)
     except ValueError:  # git rejects it too; ours then stand alone
         count = 0
     for index, (key, value) in enumerate(pairs, start=count):
@@ -276,8 +280,9 @@ class GitResolver(Resolver):
     @staticmethod
     def _cache_dir_for(url: str, ref: str, binding: Optional["_AuthBinding"] = None) -> Path:
         # The key names the credential (host and variable, never its value), so a source
-        # without ``auth`` cannot reuse a clone that was fetched with one.
-        seed = url if binding is None else f"{url}\0{binding.host}\0{binding.name}"
+        # without ``auth`` cannot reuse a clone that was fetched with one. A url holds no NUL
+        # (``_validated`` refuses it), so the parts cannot be run together into another key.
+        seed = url if binding is None else f"{url}\0{binding.endpoint}\0{binding.name}"
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
         return cache_root() / "git" / digest / _safe_ref(ref)
 
@@ -422,6 +427,8 @@ def _validated(source: Mapping[str, Any]) -> Tuple[str, str, str, Optional["_Aut
             f"git source url has disallowed scheme: {url!r} "
             f"(allowed: https/ssh/git+https/git+ssh)"
         )
+    if _CONTROL.search(url):
+        raise ResolutionError("git source url must not contain control characters")
     if _has_credentials(url):
         raise ResolutionError(
             "git source url must not carry credentials (they would reach the lock); "
@@ -433,12 +440,13 @@ def _validated(source: Mapping[str, Any]) -> Tuple[str, str, str, Optional["_Aut
 
 @dataclass(frozen=True)
 class _AuthBinding:
-    """What a source asks for: the variable that holds the token, and the host it goes to.
+    """What a source asks for: the variable that holds the token, and where it goes.
 
-    This is all the cache key needs. It holds no value.
+    *endpoint* is the host, with ``:port`` unless the port is the https default. This is all
+    the cache key needs. It holds no value.
     """
 
-    host: str
+    endpoint: str
     name: str
 
 
@@ -466,7 +474,7 @@ class _Credential:
 
     def hint(self, detail: str) -> str:
         """What to tell the operator when a fetch that carried this credential failed."""
-        if re.search(r"returned error: 30[1278]", detail):
+        if re.search(r"returned error: 30\d", detail):
             return (
                 "The url redirects, and a credential is never sent to a redirect target: "
                 "use the repository's final url."
@@ -485,13 +493,36 @@ def _csv(value: str) -> List[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def _bind_auth(url: str, auth: Mapping[str, Any]) -> Optional[_AuthBinding]:
+def _endpoint(host: str, port: Optional[str]) -> str:
+    """*host*, case-folded, with ``:port`` unless the port is the https default (443)."""
+    number = int(port) if port else 443
+    return host.lower() if number == 443 else f"{host.lower()}:{number}"
+
+
+def _allowed_endpoints() -> Set[str]:
+    """The operator's ``host`` and ``host:port`` entries, in the form :func:`_endpoint` gives."""
+    allowed: Set[str] = set()
+    for entry in _csv(os.environ.get(_AUTH_HOSTS, "")):
+        host, _, port = entry.partition(":")
+        if port and not (port.isascii() and port.isdigit()):
+            continue  # not a host[:port]: it allows nothing
+        allowed.add(_endpoint(host, port))
+    return allowed
+
+
+def _bind_auth(url: str, auth: Any) -> Optional[_AuthBinding]:
     """Check what a source asks for against what the operator allows. Reads no token.
 
-    A refusal names the setting that would allow it, never a value.
+    *auth* is what the contract wrote; anything but a mapping is an error rather than a
+    source that quietly goes without a credential. A refusal names the setting that would
+    allow the source, never a value.
     """
-    secret_ref = auth.get("secret_ref") if isinstance(auth, Mapping) else None
-    if not secret_ref:
+    if not isinstance(auth, Mapping):
+        raise ResolutionError(
+            "auth must be a mapping, for example {secret_ref: FLUID_SCAFFOLD_TOKEN}"
+        )
+    secret_ref = auth.get("secret_ref")
+    if secret_ref is None or secret_ref == "":
         return None
     if not isinstance(secret_ref, str) or not secret_ref.isidentifier():
         raise ResolutionError(f"auth.secret_ref must be an env-var-shaped name, got {secret_ref!r}")
@@ -501,26 +532,29 @@ def _bind_auth(url: str, auth: Mapping[str, Any]) -> Optional[_AuthBinding]:
             f"auth.secret_ref {secret_ref!r} is not a variable a contract may name: it must start "
             f"with {' or '.join(prefixes)} (the operator can allow more prefixes in {_SECRET_PREFIXES})"
         )
-    parts = urlsplit(url)
-    if parts.scheme == "git+https":
+    if url.startswith("git+https://"):
         raise ResolutionError(
             "auth is not supported for git+https:// urls (git does not send a credential "
             "through that scheme); use an https:// url"
         )
-    if parts.scheme != "https":
-        raise ResolutionError(f"auth is only sent over https://, not {parts.scheme or 'this url'}")
-    if not _AUTH_URL.match(url):
+    if not url.startswith("https://"):
+        scheme = url.partition("://")[0] if "://" in url else ""
+        raise ResolutionError(f"auth is only sent over https://, not {scheme or 'this url'}")
+    # The host that is checked is the host this pattern matched, not one a url parser reports.
+    shape = _AUTH_URL.match(url)
+    if not shape:
         raise ResolutionError(
             "auth is only sent to a url of the form https://host[:port]/path with a plain host "
             "name (no user, brackets, escapes, backslashes, query or fragment)"
         )
-    host = (parts.hostname or "").lower()
-    if host not in {h.lower() for h in _csv(os.environ.get(_AUTH_HOSTS, ""))}:
+    endpoint = _endpoint(shape["host"], shape["port"])
+    if endpoint not in _allowed_endpoints():
         raise ResolutionError(
-            f"auth.secret_ref: {host!r} is not a host this operator allows a credential to be sent "
-            f"to (set {_AUTH_HOSTS}, comma-separated, outside the contract)"
+            f"auth.secret_ref: {endpoint!r} is not a host this operator allows a credential to be "
+            f"sent to (set {_AUTH_HOSTS} to host or host:port entries, comma-separated, "
+            f"outside the contract)"
         )
-    return _AuthBinding(host=host, name=secret_ref)
+    return _AuthBinding(endpoint=endpoint, name=secret_ref)
 
 
 def _credential(url: str, auth: Mapping[str, Any]) -> Optional[_Credential]:
@@ -685,9 +719,11 @@ def _sweep_leftovers() -> None:
 
 # The only shape of url a credential is sent to: a plain ASCII host (no userinfo, brackets,
 # escapes or backslashes), an optional port, and a path without a query or fragment. Anything
-# a url parser might read two ways is refused, so the host checked here is the host git
-# connects to.
-_AUTH_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[^\s\\#?]*)?\Z")
+# a url parser might read two ways is refused. The host and port are read from this match
+# and nowhere else, so the host checked is the host git connects to.
+_AUTH_URL = re.compile(
+    r"https://(?P<host>[A-Za-z0-9.-]+)(?::(?P<port>[0-9]{1,5}))?(?:/[^\s\\#?\x00-\x1f\x7f]*)?\Z"
+)
 _CONFIG_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"']+", re.IGNORECASE)
 _USERINFO = re.compile(r"([a-z][a-z0-9+.-]*)://([^/?#@]*)@", re.IGNORECASE)
 
@@ -720,8 +756,12 @@ def _has_credentials(url: str) -> bool:
 
 
 def _sanitise_url(url: str) -> str:
-    """Strip any embedded credentials from a URL for safe logging."""
-    if "@" in url and url.startswith("https://"):
-        head, _, tail = url.partition("@")
-        return f"https://[redacted]@{tail}"
+    """Hide the user part of an https URL for safe logging.
+
+    Only the authority is looked at, so an ``@`` further along (in the path) is left as it
+    is, and the text still names the host git contacts.
+    """
+    match = _USERINFO.match(url)
+    if match and match.group(1).lower() == "https":
+        return f"https://[redacted]@{url[match.end():]}"
     return url

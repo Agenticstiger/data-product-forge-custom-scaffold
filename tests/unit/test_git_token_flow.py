@@ -68,6 +68,9 @@ def served(tmp_path: Path, monkeypatch) -> SimpleNamespace:
     )
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # A CI runner can set config pairs of its own (safe.directory, say); the token's pairs
+    # follow whatever is there, and the assertions below read them by index.
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
     monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_CACHE", str(tmp_path / "cache"))
     monkeypatch.delenv("FLUID_CUSTOM_SCAFFOLD_NOCACHE", raising=False)
     monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS", "example.invalid")
@@ -201,7 +204,7 @@ def test_no_process_git_starts_carries_the_token_on_its_command_line(
     # `ps` shows. The host is a closed port, so the fetch fails after the transport starts.
     trace = served.root / "trace.log"
     monkeypatch.setenv("GIT_TRACE", str(trace))
-    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS", "127.0.0.1")
+    monkeypatch.setenv("FLUID_CUSTOM_SCAFFOLD_AUTH_HOSTS", "127.0.0.1:1")  # host and port
     source = {"kind": "git", "url": "https://127.0.0.1:1/org/repo", "ref": "v1", "auth": AUTH}
 
     with pytest.raises(ResolutionError):
