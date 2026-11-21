@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 
+import pytest
 import yaml
 
 from data_product_forge_custom_scaffold import Engine
@@ -153,3 +156,44 @@ def test_pin_warns_for_non_git_source(tmp_path: Path, caplog):
     assert any(
         "cannot reproducibly lock" in r.getMessage() for r in caplog.records
     ), "pinning a non-git source must warn"
+
+
+def test_write_lock_pins_lf_newlines_on_every_platform(tmp_path: Path, monkeypatch):
+    # Text mode translates "\n" to the platform newline (CRLF on Windows) unless told
+    # not to. The lock must be the same bytes everywhere, or a dry run's digest of its
+    # text would not match the file a real run writes.
+    seen = {}
+    real_fdopen = os.fdopen
+
+    def spy(fd, *args, **kwargs):
+        seen.update(kwargs)
+        return real_fdopen(fd, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fdopen", spy)
+    write_lock(tmp_path, {"lockfileVersion": 1})
+
+    assert seen.get("newline") == "\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_a_new_lock_is_owner_only_even_with_a_permissive_umask(tmp_path: Path):
+    previous = os.umask(0)
+    try:
+        path = write_lock(tmp_path, {"lockfileVersion": 1})
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_an_existing_lock_keeps_its_mode_when_it_is_rewritten(tmp_path: Path):
+    # The mode argument only applies when the file is created; O_TRUNC leaves it alone.
+    path = tmp_path / LOCKFILE_NAME
+    path.write_text("old\n")
+    path.chmod(0o640)
+
+    write_lock(tmp_path, {"lockfileVersion": 1})
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    assert "lockfileVersion" in path.read_text()

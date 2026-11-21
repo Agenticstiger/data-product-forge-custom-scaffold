@@ -8,9 +8,14 @@ than stranding a first-run user.
 
 from __future__ import annotations
 
+import inspect
+import re
 from pathlib import Path
+from typing import List
 
 import pytest
+
+import data_product_forge_custom_scaffold as pkg
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DOCS = sorted((ROOT / "docs").rglob("*.md")) + [ROOT / "README.md"]
@@ -59,3 +64,77 @@ def test_correct_command_name(doc: Path):
         f"{doc.name} says `fluid generate custom-scaffold` — the real command is "
         "`fluid custom-scaffold` (verified: the former does not exist)"
     )
+
+
+# ── the library entry point: documented, and the docs track the signature ────
+
+LIBRARY_REFERENCE = ROOT / "docs" / "reference" / "library-api.md"
+
+
+def _signature_names() -> List[str]:
+    """Parameter names of ``generate``, with a ``*`` marking where keyword-only starts."""
+    names: List[str] = []
+    seen_keyword_only = False
+    for name, param in inspect.signature(pkg.generate).parameters.items():
+        if param.kind is inspect.Parameter.KEYWORD_ONLY and not seen_keyword_only:
+            names.append("*")
+            seen_keyword_only = True
+        names.append(name)
+    return names
+
+
+def _documented_names(text: str) -> List[str]:
+    """Parameter names in the ``def generate(...) -> GenerationResult`` block of *text*."""
+    match = re.search(r"def generate\((?P<params>.*?)\)\s*->\s*GenerationResult", text, re.DOTALL)
+    assert match, "no `def generate(...) -> GenerationResult` signature block found"
+    parts: List[str] = []
+    depth, current = 0, ""
+    for ch in match.group("params"):
+        depth += ch in "[("
+        depth -= ch in "])"
+        if ch == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    return [
+        "*" if part.strip() == "*" else re.split(r"[:=\s]", part.strip(), maxsplit=1)[0]
+        for part in parts
+        if part.strip()
+    ]
+
+
+def test_library_api_is_documented_and_discoverable():
+    # generate() is the public entry point other tools build on; shipping it without
+    # a reference page (or a README pointer to it) would leave it undiscoverable.
+    assert LIBRARY_REFERENCE.is_file(), "the library API reference page must exist"
+    text = LIBRARY_REFERENCE.read_text(encoding="utf-8")
+    for name in (
+        "GenerationResult",
+        "GeneratedFile",
+        "EngineError",
+        "ContractError",
+        "BundleError",
+        "PlanError",
+        "UnsafePathError",
+        "ApplyError",
+        "OutputError",
+    ):
+        assert name in text, f"the reference must cover {name}"
+        assert hasattr(pkg, name), f"{name} is documented but not exported"
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/reference/library-api.md" in readme
+    assert "library-api.md" in (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("doc", [ROOT / "README.md", LIBRARY_REFERENCE], ids=lambda p: p.name)
+def test_documented_signature_matches_the_code(doc: Path):
+    assert _documented_names(doc.read_text(encoding="utf-8")) == _signature_names()
+
+
+def test_every_parameter_has_a_row_in_the_reference():
+    text = LIBRARY_REFERENCE.read_text(encoding="utf-8")
+    for name in inspect.signature(pkg.generate).parameters:
+        assert f"| `{name}` |" in text, f"parameter {name!r} has no row in the parameters table"

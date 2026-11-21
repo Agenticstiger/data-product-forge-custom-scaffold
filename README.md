@@ -131,6 +131,31 @@ Exit codes:
 | `3` | at least one `apply()` action failed |
 | `4` | `--update` completed with merge conflicts (markers written; resolve them) |
 
+## Use it as a library
+
+```python
+from data_product_forge_custom_scaffold import generate
+
+result = generate(contract, "build/scaffold", contract_dir="path/to/contract")
+for f in result.files:
+    print(f.path, f.sha256, f.size)
+```
+
+`generate()` runs what `fluid custom-scaffold` runs and returns every file it wrote to
+the output directory as `(relative path, sha256, size)`, sorted by path — so a host
+can record the written files in a manifest without parsing `--json`. A dry run
+(`dry_run=True`) writes nothing and returns the same rows; a path that would leave
+the output directory is refused before its pattern is applied; engine failures are
+typed (`EngineError` and subclasses). The command is a thin wrapper over it.
+
+```python
+def generate(contract, out_dir, *, contract_dir=None, dry_run=False,
+             pattern_filter=None, library_filter=None, pin=False,
+             dialect=DEFAULT_DIALECT) -> GenerationResult
+```
+
+Full reference: **[`docs/reference/library-api.md`](docs/reference/library-api.md)**.
+
 ## Reproducibility & updates
 
 Every successful generation writes a **`fluid-scaffold.lock`** at the output
@@ -167,6 +192,7 @@ advances. Full walkthrough: [`docs/walkthrough/reproducible-updates.md`](docs/wa
 | **[`docs/walkthrough/from-git-bundle.md`](docs/walkthrough/from-git-bundle.md)** | 5-min: consume a public bundle straight from a git repo |
 | **[`docs/walkthrough/reproducible-updates.md`](docs/walkthrough/reproducible-updates.md)** | The lockfile, `--pin`, and `--update` (3-way merge) — reproducibility & updates |
 | **[`docs/reference/manifest-format.md`](docs/reference/manifest-format.md)** | Full `fluid-scaffold.yaml` reference |
+| **[`docs/reference/library-api.md`](docs/reference/library-api.md)** | `generate()` — call the engine from Python and get every written file with its sha256 |
 
 ## License
 

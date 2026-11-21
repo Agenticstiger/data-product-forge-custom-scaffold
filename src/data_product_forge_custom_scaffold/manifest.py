@@ -41,13 +41,14 @@ import yaml
 
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
+from .errors import BundleError
 from .version import MANIFEST_API_VERSION
 
 MANIFEST_FILENAME = "fluid-scaffold.yaml"
 STATIC_DIRNAME = "static"
 
 
-class ManifestError(ValueError):
+class ManifestError(BundleError, ValueError):
     """Raised when ``fluid-scaffold.yaml`` is malformed or unparseable."""
 
 

@@ -22,11 +22,10 @@ from typing import Any, List, Mapping
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 
+from .errors import RenderError, UnsafePathError
 from .manifest import STATIC_DIRNAME, PatternEntry, TemplateEntry
 
-
-class RenderError(RuntimeError):
-    """Raised when a template fails to render or a path escapes the output root."""
+__all__ = ["RenderError", "RenderedFile", "Renderer", "UnsafePathError"]
 
 
 @dataclass(frozen=True)
@@ -43,9 +42,9 @@ def _check_path_safety(rendered_path: str) -> None:
     """Reject absolute paths and ``..`` traversal in rendered output paths."""
     p = Path(rendered_path)
     if p.is_absolute():
-        raise RenderError(f"output path must be relative, got absolute: {rendered_path!r}")
+        raise UnsafePathError(f"output path must be relative, got absolute: {rendered_path!r}")
     if any(part == ".." for part in p.parts):
-        raise RenderError(f"output path must not contain '..': {rendered_path!r}")
+        raise UnsafePathError(f"output path must not contain '..': {rendered_path!r}")
 
 
 class Renderer:

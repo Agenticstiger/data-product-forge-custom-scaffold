@@ -11,9 +11,13 @@ Source shape::
     }
 
 Auth: ``secret_ref`` names an environment variable holding the token.
-The token is injected into the clone URL as
-``https://<token>@host/repo``. The token is never written to disk and
-never logged.
+The token is injected into the clone URL as ``https://<token>@host/repo``. It is
+never logged and is not left on disk: a branch or tag clone has its remote URL
+reset to the credential-free URL straight after the clone (``git clone`` records
+the URL it was given), and a commit pin passes the URL inline to ``git fetch``.
+
+git never prompts on the terminal for a credential (``GIT_TERMINAL_PROMPT=0``
+unless the caller sets it), so a library call cannot hang waiting for input.
 
 Cache layout::
 
@@ -34,7 +38,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ..manifest import MANIFEST_FILENAME
 from .base import ResolutionError, ResolvedBundle, Resolver, cache_root
@@ -46,6 +50,17 @@ _ALLOWED_SCHEMES = ("https://", "ssh://", "git@", "git+https://", "git+ssh://")
 # clone --branch`` rejects raw commit ids ("Remote branch <sha> not found"), so
 # a ref of this shape is fetched + checked out instead of branch-cloned.
 _FULL_SHA_RE = re.compile(r"\A(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+
+
+def _git_env() -> Dict[str, str]:
+    """The environment for git subprocesses: no terminal credential prompt.
+
+    ``GIT_TERMINAL_PROMPT=0`` is a default, not an override: a caller that has set it
+    keeps its value.
+    """
+    env = dict(os.environ)
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    return env
 
 
 def _looks_like_full_sha(ref: str) -> bool:
@@ -152,6 +167,26 @@ class GitResolver(Resolver):
             self._fetch_sha_into_cache(clone_url, ref, cache_dir, url)
         else:
             self._clone_ref_into_cache(clone_url, ref, cache_dir, url)
+            if clone_url != url:
+                self._scrub_token(cache_dir, clone_url, url)
+
+    def _scrub_token(self, cache_dir: Path, clone_url: str, url: str) -> None:
+        """Reset a token clone's ``origin`` to the credential-free URL.
+
+        ``git clone`` writes the URL it was given, token included, into
+        ``.git/config``. Put the plain URL back; if that fails, delete the clone rather
+        than leave the token in the cache.
+        """
+        try:
+            self._git(
+                ["-C", str(cache_dir), "remote", "set-url", "origin", url],
+                clone_url=clone_url,
+                url=url,
+                what="reset the remote URL",
+            )
+        except ResolutionError:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            raise
 
     def _clone_ref_into_cache(self, clone_url: str, ref: str, cache_dir: Path, url: str) -> None:
         # Branch or tag: a shallow ``--branch`` clone is the cheapest path.
@@ -197,7 +232,9 @@ class GitResolver(Resolver):
     def _git(args: List[str], *, clone_url: str, url: str, what: str) -> None:
         """Run a git subcommand, redacting any embedded token from errors."""
         try:
-            subprocess.run(["git", *args], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", *args], check=True, capture_output=True, text=True, env=_git_env()
+            )
         except FileNotFoundError as e:
             raise ResolutionError("git resolver requires the 'git' binary on PATH") from e
         except subprocess.CalledProcessError as e:
@@ -214,7 +251,9 @@ class GitResolver(Resolver):
         as a real error from the preceding :meth:`_git` ``init`` call.
         """
         try:
-            subprocess.run(["git", *args], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", *args], check=True, capture_output=True, text=True, env=_git_env()
+            )
             return True
         except (FileNotFoundError, subprocess.CalledProcessError):
             return False
@@ -227,6 +266,7 @@ class GitResolver(Resolver):
                 check=True,
                 capture_output=True,
                 text=True,
+                env=_git_env(),
             )
             return result.stdout.strip()
         except Exception:

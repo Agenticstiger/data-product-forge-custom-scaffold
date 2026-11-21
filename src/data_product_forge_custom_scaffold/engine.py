@@ -26,13 +26,30 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from fluid_sdk import CustomScaffold, ExecutionResult, PluginError
 
+from .confinement import confine_actions
 from .dialect import DEFAULT as DEFAULT_DIALECT
 from .dialect import ScaffoldDialect
-from .lockfile import LOCKFILE_NAME, build_lock, pin_source, read_lock, write_lock
+from .errors import (
+    ApplyError,
+    BundleError,
+    ContractError,
+    EngineError,  # moved to .errors with the hierarchy; callers still import it from here
+    PlanError,
+    UnsafePathError,
+)
+from .lockfile import (
+    LOCKFILE_NAME,
+    build_lock,
+    dump_lock,
+    lock_path,
+    pin_source,
+    read_lock,
+    write_lock,
+)
 from .resolvers import ResolvedBundle, resolve_bundle
 from .templated import TemplatedCustomScaffold
 from .update import UpdateError, UpdateResult, actions_to_render, merge_renders
@@ -51,11 +68,10 @@ class EngineRunResult:
     # Path to the fluid-scaffold.lock written for this run (None on dry-run or
     # when nothing was resolved).
     lockfile: Optional[Path] = None
-
-
-class EngineError(RuntimeError):
-    """Raised when the engine can't complete a run (config error, missing
-    library, etc.)."""
+    # The exact text of the lock for this run — set on a dry run too (where nothing
+    # is written), so a caller can preview the full output. None when no library
+    # was resolved.
+    lock_text: Optional[str] = None
 
 
 class Engine:
@@ -118,6 +134,11 @@ class Engine:
             # the contract's directory, not the invoking process cwd.
             resolved[lib_id] = resolve_bundle(source, contract_dir=self.contract_dir)
 
+        if resolved:
+            # The lock is written last; refuse a symlink planted at its name now, before
+            # any pattern is applied (and on a dry run, which checks every path).
+            lock_path(self.output_root)
+
         # 2. Plan + apply each pattern.
         all_actions: List[Dict[str, Any]] = []
         apply_results: List[ExecutionResult] = []
@@ -140,58 +161,23 @@ class Engine:
                         lib_id,
                     )
                     continue
-                raise EngineError(
+                raise ContractError(
                     f"pattern {use!r} references library {lib_id!r}, "
                     f"which was not declared (known: {sorted(resolved.keys())})"
                 )
 
-            scaffold = self._instantiate_scaffold(
-                resolved[lib_id],
-                pattern_name=pattern_name,
-                variables=pattern_decl.get("variables") or {},
+            scaffold = _build_scaffold(
+                self, resolved[lib_id], use, pattern_name, pattern_decl.get("variables") or {}
             )
-
-            try:
-                actions = scaffold.plan(contract)
-            except PluginError as e:
-                # PluginError is user-actionable by the SDK contract — surface it.
-                raise EngineError(f"plan failed for pattern {use!r}: {e}") from e
-            except Exception as e:
-                # Unexpected: isolate and surface the exception TYPE only. An
-                # arbitrary exception's text may carry secrets (a credential in a
-                # message, a value from a stack); never interpolate it. The full
-                # traceback is still chained via ``from e``.
-                raise EngineError(f"plan failed for pattern {use!r}: {type(e).__name__}") from e
-
+            actions = _plan_confined(use, scaffold, contract, self.output_root)
             all_actions.extend(actions)
 
             if not dry_run:
-                # apply() runs plugin code that writes to disk. Isolate it the same
-                # way as plan() — a failing apply must not crash the run with a raw,
-                # possibly secret-bearing traceback.
-                try:
-                    apply_results.append(scaffold.apply(actions))
-                except PluginError as e:
-                    raise EngineError(f"apply failed for pattern {use!r}: {e}") from e
-                except Exception as e:
-                    raise EngineError(
-                        f"apply failed for pattern {use!r}: {type(e).__name__}"
-                    ) from e
+                apply_results.append(_apply_isolated(use, scaffold, actions))
 
-        # Record what generated this output, for reproducible re-runs (copier's
-        # answers-file model). Best-effort: a lock-write failure must not fail an
-        # otherwise-successful generation.
-        lockfile_path: Optional[Path] = None
-        if not dry_run and resolved:
-            try:
-                lock = build_lock(
-                    engine_version=ENGINE_VERSION,
-                    resolved=resolved,
-                    patterns=block.get("patterns", []),
-                )
-                lockfile_path = write_lock(self.output_root, lock)
-            except OSError as e:
-                LOG.warning("could not write lockfile: %s", type(e).__name__)
+        lockfile_path, lock_text = _record_lock(
+            self.output_root, resolved, block.get("patterns", []), dry_run=dry_run
+        )
 
         return EngineRunResult(
             actions=all_actions,
@@ -202,6 +188,7 @@ class Engine:
             ),
             resolved_libraries=resolved,
             lockfile=lockfile_path,
+            lock_text=lock_text,
         )
 
     def update(
@@ -324,7 +311,7 @@ class Engine:
                 return cls(output_root=self.output_root)
 
         if resolved.bundle_root is None:
-            raise EngineError(
+            raise BundleError(
                 f"resolved bundle for kind={resolved.kind!r} has neither "
                 f"bundle_root nor plugin_class — resolver bug"
             )
@@ -345,6 +332,97 @@ class Engine:
         if not isinstance(block, Mapping):
             return None
         return block
+
+
+def _build_scaffold(
+    engine: Engine,
+    bundle: ResolvedBundle,
+    use: str,
+    pattern_name: str,
+    variables: Mapping[str, Any],
+) -> CustomScaffold:
+    """Instantiate a pattern's scaffold; every failure becomes a typed ``BundleError``."""
+    try:
+        return engine._instantiate_scaffold(bundle, pattern_name=pattern_name, variables=variables)
+    except EngineError:
+        raise  # ManifestError / RenderError: already typed, engine-authored text
+    except PluginError as e:
+        # E.g. the bundle has no such pattern — user-actionable, surface it.
+        raise BundleError(f"pattern {use!r}: {e}") from e
+    except Exception as e:
+        # A plugin class's own constructor failed: type only, as for plan().
+        raise BundleError(
+            f"pattern {use!r}: its scaffold failed to initialise: {type(e).__name__}"
+        ) from e
+
+
+def _plan_confined(
+    use: str, scaffold: CustomScaffold, contract: Mapping[str, Any], output_root: Path
+) -> List[Dict[str, Any]]:
+    """Run ``plan()`` in isolation, then confine every planned path before apply."""
+    try:
+        # One list for confinement, the recorded plan and apply(): a one-shot iterable
+        # (a generator) would otherwise be consumed by the first of them.
+        actions = list(scaffold.plan(contract))
+        # Confine BEFORE apply() — for every bundle kind, and on a dry run too, so a
+        # plan that escapes the output directory is refused rather than listed as
+        # "would write".
+        confine_actions(output_root, actions)
+    except UnsafePathError as e:
+        raise UnsafePathError(f"plan failed for pattern {use!r}: {e}") from e
+    except PluginError as e:
+        # PluginError is user-actionable by the SDK contract — surface it.
+        raise PlanError(f"plan failed for pattern {use!r}: {e}") from e
+    except Exception as e:
+        # Unexpected: isolate and surface the exception TYPE only. An arbitrary
+        # exception's text may carry secrets (a credential in a message, a value
+        # from a stack); never interpolate it. The full traceback is still chained
+        # via ``from e``.
+        raise PlanError(f"plan failed for pattern {use!r}: {type(e).__name__}") from e
+    return actions
+
+
+def _apply_isolated(
+    use: str, scaffold: CustomScaffold, actions: List[Dict[str, Any]]
+) -> ExecutionResult:
+    """Run ``apply()`` in isolation.
+
+    apply() runs plugin code that writes to disk. Isolate it the same way as plan():
+    a failing apply must not crash the run with a raw, possibly secret-bearing
+    traceback.
+    """
+    try:
+        return scaffold.apply(actions)
+    except PluginError as e:
+        raise ApplyError(f"apply failed for pattern {use!r}: {e}") from e
+    except Exception as e:
+        raise ApplyError(f"apply failed for pattern {use!r}: {type(e).__name__}") from e
+
+
+def _record_lock(
+    output_root: Path,
+    resolved: Mapping[str, ResolvedBundle],
+    patterns: List[Mapping[str, Any]],
+    *,
+    dry_run: bool,
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Build the lock for this run and, unless it is a dry run, write it.
+
+    Records what generated this output, for reproducible re-runs (copier's
+    answers-file model). Returns ``(path written or None, lock text or None)``; the
+    text is returned on a dry run too. Best-effort: a lock-write failure must not
+    fail an otherwise-successful generation.
+    """
+    if not resolved:
+        return None, None
+    lock = build_lock(engine_version=ENGINE_VERSION, resolved=resolved, patterns=patterns)
+    path: Optional[Path] = None
+    if not dry_run:
+        try:
+            path = write_lock(output_root, lock)
+        except OSError as e:
+            LOG.warning("could not write lockfile: %s", type(e).__name__)
+    return path, dump_lock(lock)
 
 
 def _aggregate(
