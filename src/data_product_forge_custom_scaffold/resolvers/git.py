@@ -729,7 +729,8 @@ def _sweep_leftovers(keep: Optional[Path] = None) -> None:
       is refused.
 
     The entry in *keep*, the one this run is about to use, is left to
-    :func:`_drop_stored_credentials`.
+    :func:`_drop_stored_credentials`. A url directory that is itself a link is skipped whole:
+    what is under it is not the engine's to delete.
     """
     git_cache = cache_root() / "git"
     try:
@@ -739,7 +740,7 @@ def _sweep_leftovers(keep: Optional[Path] = None) -> None:
     now = time.time()
     for path in entries:
         try:
-            if path == keep:
+            if path == keep or path.parent.is_symlink():
                 continue
             if not path.name.startswith(_LEFTOVERS):
                 if _linked(path) is None and _stored_credentials(path):

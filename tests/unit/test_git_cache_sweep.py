@@ -215,6 +215,20 @@ def test_a_clone_that_is_or_holds_a_link_is_left_alone_not_deleted_through(
     assert victim.read_text() == TAINTED and (outside / ".git" / "config").read_text() == TAINTED
 
 
+def test_a_url_directory_that_is_a_link_is_never_swept_through(
+    git_cache: Path, tmp_path: Path, monkeypatch
+) -> None:
+    # The sweep deletes only inside `<cache>/git/<hash>/`; a link there leads somewhere else.
+    outside = tmp_path / "outside"
+    legacy = _leftover(outside, "v1", config=TAINTED)
+    stale = _leftover(outside, ".old-stale")
+    (git_cache / "linked-hash").symlink_to(outside, target_is_directory=True)
+
+    _sweep(monkeypatch, later=DAY + 60)
+
+    assert legacy.exists() and stale.exists()
+
+
 def test_a_run_for_one_source_removes_the_old_clone_of_another(
     git_cache: Path, monkeypatch
 ) -> None:
