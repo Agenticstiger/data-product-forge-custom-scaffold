@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-21
+
 ### Added
 
 - **`generate()` — a public library entry point.**
@@ -28,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Requires `data-product-forge-sdk` 0.11.0 or later** (the floor was 0.9). The engine
+  writes a bundle's output through the SDK's `CustomScaffold.apply()`. From 0.11.0 that
+  writes each file through a temp file that is never a pre-existing name, so a symlink
+  planted in the output directory can no longer send the write, or the `chmod`, to a file
+  outside it; keeps a planned setuid or setgid bit; and rejects a path that names the
+  output directory itself. The floor keeps an install from resolving to an SDK that stages
+  files at a predictable name.
 - **Breaking: a `git` source's `auth` needs the operator to allow it.** A contract may
   come from a pull request, and `auth.secret_ref` used to name any environment variable
   while `url` named any host, so a contract could make the engine send any secret of the
