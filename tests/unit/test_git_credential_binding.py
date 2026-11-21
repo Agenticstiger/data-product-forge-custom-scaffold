@@ -59,10 +59,10 @@ def test_nothing_is_sent_anywhere_until_the_operator_lists_a_host(monkeypatch) -
     monkeypatch.setenv("FLUID_SCAFFOLD_TOKEN", SECRET)
     _no_git(monkeypatch)
 
-    with pytest.raises(ResolutionError) as refused:
+    with pytest.raises(ResolutionError, match=r"'github\.com' is not a host") as refused:
         GitResolver().resolve(_source(auth={"secret_ref": "FLUID_SCAFFOLD_TOKEN"}))
 
-    assert HOSTS in str(refused.value) and "github.com" in str(refused.value)
+    assert HOSTS in str(refused.value)  # it names the setting that would allow it
     assert SECRET not in str(refused.value)
 
 

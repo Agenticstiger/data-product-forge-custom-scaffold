@@ -57,10 +57,17 @@ def _basic(token: str) -> str:
     return base64.b64encode(f"x-access-token:{token}".encode()).decode()
 
 
+# What the server sends back is built from constants, never from the request or from what
+# git http-backend printed, so nothing a client sent can end up in a header.
+_ADVERTISEMENT = "application/x-git-upload-pack-advertisement"
+_RESULT = "application/x-git-upload-pack-result"
+_MOVED = "/org/moved.git/info/refs?service=git-upload-pack"
+
+
 def _backend_answer(
     backend: Path, repos: Path, request: BaseHTTPRequestHandler, path: str, query: str
-) -> Tuple[int, List[Tuple[str, str]], bytes]:
-    """Run ``git http-backend`` for *request*; its status, headers and body."""
+) -> Tuple[int, bytes]:
+    """Run ``git http-backend`` for *request*; its status and body."""
     length = int(request.headers.get("Content-Length") or 0)
     env = {
         **os.environ,
@@ -83,14 +90,12 @@ def _backend_answer(
         timeout=60,
     ).stdout
     head, _, payload = out.partition(b"\r\n\r\n")
-    status, headers = 200, []
+    status = 200
     for line in head.decode("latin-1").split("\r\n"):
         name, _, value = line.partition(":")
         if name.lower() == "status":
             status = int(value.split()[0])
-        elif name:
-            headers.append((name, value.strip()))
-    return status, headers, payload
+    return status, payload
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -100,7 +105,7 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args: object) -> None:  # keep the test output quiet
         pass
 
-    def _answer(self, status: int, headers: List[Tuple[str, str]], body: bytes) -> None:
+    def _answer(self, status: int, body: bytes, *headers: Tuple[str, str]) -> None:
         self.send_response(status)
         for name, value in headers:
             self.send_header(name, value)
@@ -113,13 +118,14 @@ class _Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         if self.server.redirect and path.endswith("/info/refs"):
             self.server.requests.append((self.path, sent, 301))
-            moved = self.path.replace("/org/repo.git", "/org/moved.git")
-            return self._answer(301, [("Location", moved)], b"")
+            return self._answer(301, b"", ("Location", _MOVED))
         if sent != f"Basic {_basic(self.server.token)}":
             self.server.requests.append((self.path, sent, 401))
-            return self._answer(401, [("WWW-Authenticate", 'Basic realm="git"')], b"")
+            return self._answer(401, b"", ("WWW-Authenticate", 'Basic realm="git"'))
         self.server.requests.append((self.path, sent, 200))
-        self._answer(*_backend_answer(self.server.backend, self.server.repos, self, path, query))
+        status, payload = _backend_answer(self.server.backend, self.server.repos, self, path, query)
+        kind = _ADVERTISEMENT if path.endswith("/info/refs") else _RESULT
+        self._answer(status, payload, ("Content-Type", kind))
 
     def do_GET(self) -> None:  # noqa: N802 (the name http.server calls)
         self._serve()
@@ -138,6 +144,7 @@ class GitServer(ThreadingHTTPServer):
         self.redirect = False
         self.requests: List[Tuple[str, Optional[str], int]] = []
         context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(cert, key)
         self.socket = context.wrap_socket(self.socket, server_side=True)
         self.port = self.server_address[1]
