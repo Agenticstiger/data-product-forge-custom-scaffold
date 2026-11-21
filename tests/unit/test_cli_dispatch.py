@@ -8,17 +8,7 @@ positional args; see fluid_build/cli/__init__.py). A one-arg handler raises
 
 from __future__ import annotations
 
-import argparse
-
-from data_product_forge_custom_scaffold import cli
 from tests.helpers import parse_cli
-
-
-def _custom_scaffold_subparser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser()
-    sub = root.add_subparsers(dest="cmd")
-    cli.make_register()(sub)
-    return sub.choices["custom-scaffold"]
 
 
 def test_command_func_accepts_two_positional_args(capsys):
